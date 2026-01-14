@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "./Base.t.sol";
+import "forge-std/Test.sol";
+import "forge-std/StdInvariant.sol";
 
 import "../src/LotteryRegistry.sol";
 import "../src/SingleWinnerDeployer.sol";
@@ -9,10 +10,72 @@ import "../src/LotterySingleWinner.sol";
 
 import "./mocks/MockUSDC.sol";
 import "./mocks/MockEntropy.sol";
+import "./mocks/RevertingReceiver.sol";
+
+/// @notice Separate base class for invariant tests to avoid inheritance diamond.
+/// @dev StdInvariant versions differ; importing Test explicitly keeps `vm` available reliably.
+contract InvariantBaseTest is StdInvariant {
+    address internal admin;
+    address internal safeOwner;
+    address internal creator;
+    address internal buyer1;
+    address internal buyer2;
+    address internal feeRecipient;
+    address internal provider;
+
+    LotteryRegistry internal registry;
+    SingleWinnerDeployer internal deployer;
+
+    MockUSDC internal usdc;
+    MockEntropy internal entropy;
+
+    function setUp() public virtual {
+        admin        = vm.addr(1);
+        safeOwner    = vm.addr(2);
+        creator      = vm.addr(3);
+        buyer1       = vm.addr(4);
+        buyer2       = vm.addr(5);
+        feeRecipient = vm.addr(6);
+        provider     = vm.addr(7);
+
+        vm.startPrank(admin);
+
+        usdc = new MockUSDC();
+        entropy = new MockEntropy();
+        entropy.setFee(provider, 0.01 ether);
+
+        registry = new LotteryRegistry(admin);
+
+        deployer = new SingleWinnerDeployer(
+            admin,
+            address(registry),
+            safeOwner,
+            address(usdc),
+            address(entropy),
+            provider,
+            feeRecipient,
+            10
+        );
+
+        registry.setRegistrar(address(deployer), true);
+
+        vm.stopPrank();
+
+        usdc.mint(creator, 50_000_000 * 1e6);
+        usdc.mint(buyer1, 50_000_000 * 1e6);
+        usdc.mint(buyer2, 50_000_000 * 1e6);
+
+        vm.deal(creator, 100 ether);
+        vm.deal(buyer1, 100 ether);
+        vm.deal(buyer2, 100 ether);
+        vm.deal(admin, 100 ether);
+        vm.deal(safeOwner, 100 ether);
+        vm.deal(feeRecipient, 100 ether);
+    }
+}
 
 /// @notice Fuzz action handler that creates lotteries via the deployer and interacts with them.
-/// @dev This is the contract Foundry will call randomly (targetContract).
-contract LotteryInvariantHandler is BaseTest {
+contract LotteryInvariantHandler is Test {
     LotteryRegistry public registry;
     SingleWinnerDeployer public deployer;
     MockUSDC public usdc;
@@ -55,8 +118,6 @@ contract LotteryInvariantHandler is BaseTest {
         provider = _provider;
     }
 
-    // -------- view helpers used by invariants --------
-
     function lotsLength() external view returns (uint256) {
         return lots.length;
     }
@@ -64,8 +125,6 @@ contract LotteryInvariantHandler is BaseTest {
     function lotsAt(uint256 i) external view returns (LotterySingleWinner) {
         return lots[i];
     }
-
-    // -------- internal helpers --------
 
     function _hasLots() internal view returns (bool) {
         return lots.length > 0;
@@ -76,7 +135,6 @@ contract LotteryInvariantHandler is BaseTest {
     }
 
     function _pickActor(uint256 seed) internal view returns (address) {
-        // Keep actor set small; include admin/safeOwner occasionally.
         uint256 m = seed % 6;
         if (m == 0) return creator;
         if (m == 1) return buyer1;
@@ -86,20 +144,15 @@ contract LotteryInvariantHandler is BaseTest {
         return admin;
     }
 
-    // -------- fuzz actions --------
+    // ---------------- fuzz actions ----------------
 
-    /// @notice Create a new lottery through the deployer.
     function act_deployLottery(uint256 seed) external {
-        // Keep runtime bounded
         if (lots.length >= 10) return;
 
-        // Bounds must respect LotterySingleWinner constructor constraints:
-        // - durationSeconds >= 600
-        // - ticketPrice > 0 and satisfy your anti-spam MIN_NEW_RANGE_COST logic
         uint256 winningPot = bound(seed, 1_000 * 1e6, 50_000 * 1e6);
         uint256 ticketPrice = bound(seed >> 16, 1e6, 10e6);
         uint64 minTickets = uint64(bound(seed >> 32, 1, 50));
-        uint64 maxTickets = 0; // uncapped
+        uint64 maxTickets = 0;
         uint64 durationSeconds = uint64(bound(seed >> 48, 600, 3 days));
         uint32 minPurchaseAmount = 0;
 
@@ -116,14 +169,11 @@ contract LotteryInvariantHandler is BaseTest {
             minPurchaseAmount
         ) returns (address lotAddr) {
             lots.push(LotterySingleWinner(payable(lotAddr)));
-        } catch {
-            // ignore
-        }
+        } catch {}
 
         vm.stopPrank();
     }
 
-    /// @notice Buy tickets from buyer1/buyer2 only.
     function act_buy(uint256 lotSeed, uint256 actorSeed, uint256 countSeed) external {
         if (!_hasLots()) return;
 
@@ -131,7 +181,6 @@ contract LotteryInvariantHandler is BaseTest {
         address buyer = _pickActor(actorSeed);
 
         if (buyer != buyer1 && buyer != buyer2) return;
-
         if (lot.status() != LotterySingleWinner.Status.Open) return;
 
         uint256 count = bound(countSeed, 1, lot.MAX_BATCH_BUY());
@@ -144,18 +193,15 @@ contract LotteryInvariantHandler is BaseTest {
         vm.stopPrank();
     }
 
-    /// @notice Warp time forward.
     function act_warp(uint256 dtSeed) external {
         uint256 dt = bound(dtSeed, 0, 10 days);
         vm.warp(block.timestamp + dt);
     }
 
-    /// @notice Finalize when ready; caller pays entropy fee (+ optional overpay).
     function act_finalize(uint256 lotSeed, uint256 actorSeed, uint256 overpaySeed) external {
         if (!_hasLots()) return;
 
         LotterySingleWinner lot = _pickLot(lotSeed);
-
         if (lot.status() != LotterySingleWinner.Status.Open) return;
         if (lot.entropyRequestId() != 0) return;
 
@@ -170,7 +216,6 @@ contract LotteryInvariantHandler is BaseTest {
         vm.stopPrank();
     }
 
-    /// @notice Fulfill entropy if request is pending.
     function act_fulfill(uint256 lotSeed, bytes32 rand) external {
         if (!_hasLots()) return;
 
@@ -181,7 +226,6 @@ contract LotteryInvariantHandler is BaseTest {
         try entropy.fulfill(req, rand) {} catch {}
     }
 
-    /// @notice Attempt normal cancel (deadline passed and minTickets not reached).
     function act_cancel(uint256 lotSeed, uint256 actorSeed) external {
         if (!_hasLots()) return;
 
@@ -197,7 +241,6 @@ contract LotteryInvariantHandler is BaseTest {
         vm.stopPrank();
     }
 
-    /// @notice Force-cancel if stuck in Drawing and hatch delay passed.
     function act_forceCancelStuck(uint256 lotSeed, uint256 actorSeed) external {
         if (!_hasLots()) return;
 
@@ -215,7 +258,6 @@ contract LotteryInvariantHandler is BaseTest {
         vm.stopPrank();
     }
 
-    /// @notice Claim ticket refunds when canceled.
     function act_claimTicketRefund(uint256 lotSeed, uint256 actorSeed) external {
         if (!_hasLots()) return;
 
@@ -228,7 +270,6 @@ contract LotteryInvariantHandler is BaseTest {
         vm.stopPrank();
     }
 
-    /// @notice Withdraw USDC claimables.
     function act_withdrawFunds(uint256 lotSeed, uint256 actorSeed) external {
         if (!_hasLots()) return;
 
@@ -240,7 +281,6 @@ contract LotteryInvariantHandler is BaseTest {
         vm.stopPrank();
     }
 
-    /// @notice Withdraw native claimables.
     function act_withdrawNative(uint256 lotSeed, uint256 actorSeed) external {
         if (!_hasLots()) return;
 
@@ -252,7 +292,6 @@ contract LotteryInvariantHandler is BaseTest {
         vm.stopPrank();
     }
 
-    /// @notice Sweep USDC surplus (safeOwner is owner of lotteries post-deploy).
     function act_sweepUSDC(uint256 lotSeed) external {
         if (!_hasLots()) return;
 
@@ -263,7 +302,6 @@ contract LotteryInvariantHandler is BaseTest {
         vm.stopPrank();
     }
 
-    /// @notice Sweep native surplus.
     function act_sweepNative(uint256 lotSeed) external {
         if (!_hasLots()) return;
 
@@ -274,7 +312,6 @@ contract LotteryInvariantHandler is BaseTest {
         vm.stopPrank();
     }
 
-    /// @notice Update deployer config (admin is deployer owner).
     function act_updateDeployerConfig(uint256 seed) external {
         address newFee = (seed % 2 == 0) ? feeRecipient : admin;
         address newProv = (seed % 3 == 0) ? provider : buyer1;
@@ -286,14 +323,13 @@ contract LotteryInvariantHandler is BaseTest {
     }
 }
 
-/// @notice Invariant test that fuzzes deployer+registry+lottery interactions.
-contract LotteryInvariant_DeployerRegistry is BaseTest {
+contract LotteryInvariant_DeployerRegistry is InvariantBaseTest {
     LotteryInvariantHandler internal handler;
 
     function setUp() public override {
         super.setUp();
 
-        // ensure fee exists
+        // Ensure entropy fee is non-zero
         vm.startPrank(admin);
         entropy.setFee(provider, 0.01 ether);
         vm.stopPrank();
@@ -315,24 +351,18 @@ contract LotteryInvariant_DeployerRegistry is BaseTest {
         targetContract(address(handler));
     }
 
-    /// @notice For all deployed lotteries:
-    /// - USDC balance covers "reserved" accounting
-    /// - native balance covers totalClaimableNative
-    /// - drawing state variables are consistent
     function invariant_solvencyAndStateSanity() public view {
         uint256 n = handler.lotsLength();
         for (uint256 i = 0; i < n; i++) {
             LotterySingleWinner lot = handler.lotsAt(i);
 
             // USDC solvency vs current accounting variable
-            uint256 bal = usdc.balanceOf(address(lot));
-            uint256 reserved = lot.totalReservedUSDC();
-            assertGe(bal, reserved);
+            assertGe(usdc.balanceOf(address(lot)), lot.totalReservedUSDC());
 
             // Native solvency
             assertGe(address(lot).balance, lot.totalClaimableNative());
 
-            // Single-instance lottery should have activeDrawings in {0,1}
+            // For a single lottery instance, activeDrawings ∈ {0,1}
             assertLe(lot.activeDrawings(), 1);
 
             // Drawing sanity
@@ -342,24 +372,23 @@ contract LotteryInvariant_DeployerRegistry is BaseTest {
                 assertTrue(lot.soldAtDrawing() > 0);
             }
 
-            // Open state should have no pending request
+            // Open should not have a pending request
             if (lot.status() == LotterySingleWinner.Status.Open) {
                 assertEq(lot.entropyRequestId(), 0);
             }
         }
     }
 
-    /// @notice Registry consistency and deployer/safeOwner ownership expectations.
     function invariant_registryConsistency() public view {
         uint256 n = handler.lotsLength();
         for (uint256 i = 0; i < n; i++) {
             LotterySingleWinner lot = handler.lotsAt(i);
 
-            // Created by this deployer and transferred to safeOwner
+            // Deployer + ownership expectations
             assertEq(lot.deployer(), address(deployer));
             assertEq(lot.owner(), safeOwner);
 
-            // If it is registered, registry metadata must match.
+            // If registered, registry metadata must match.
             uint256 typeId = registry.typeIdOf(address(lot));
             if (typeId != 0) {
                 assertEq(typeId, deployer.SINGLE_WINNER_TYPE_ID());
