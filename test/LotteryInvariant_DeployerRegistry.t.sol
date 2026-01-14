@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "forge-std/Test.sol";
-import "forge-std/StdInvariant.sol";
-
 import "./Base.t.sol";
 
 import "../src/LotteryRegistry.sol";
@@ -15,7 +12,7 @@ import "./mocks/MockEntropy.sol";
 
 /// @notice Fuzz action handler that creates lotteries via the deployer and interacts with them.
 /// @dev This is the contract Foundry will call randomly (targetContract).
-contract LotteryInvariantHandler is Test {
+contract LotteryInvariantHandler is BaseTest {
     LotteryRegistry public registry;
     SingleWinnerDeployer public deployer;
     MockUSDC public usdc;
@@ -98,8 +95,7 @@ contract LotteryInvariantHandler is Test {
 
         // Bounds must respect LotterySingleWinner constructor constraints:
         // - durationSeconds >= 600
-        // - ticketPrice > 0 and also satisfy the MIN_NEW_RANGE_COST logic (your default suite uses >= 2e6)
-        // We'll keep ticketPrice >= 1e6 and <= 10e6.
+        // - ticketPrice > 0 and satisfy your anti-spam MIN_NEW_RANGE_COST logic
         uint256 winningPot = bound(seed, 1_000 * 1e6, 50_000 * 1e6);
         uint256 ticketPrice = bound(seed >> 16, 1e6, 10e6);
         uint64 minTickets = uint64(bound(seed >> 32, 1, 50));
@@ -291,7 +287,7 @@ contract LotteryInvariantHandler is Test {
 }
 
 /// @notice Invariant test that fuzzes deployer+registry+lottery interactions.
-contract LotteryInvariant_DeployerRegistry is BaseTest, StdInvariant {
+contract LotteryInvariant_DeployerRegistry is BaseTest {
     LotteryInvariantHandler internal handler;
 
     function setUp() public override {
@@ -323,7 +319,7 @@ contract LotteryInvariant_DeployerRegistry is BaseTest, StdInvariant {
     /// - USDC balance covers "reserved" accounting
     /// - native balance covers totalClaimableNative
     /// - drawing state variables are consistent
-    function invariant_solvencyAndStateSanity() public {
+    function invariant_solvencyAndStateSanity() public view {
         uint256 n = handler.lotsLength();
         for (uint256 i = 0; i < n; i++) {
             LotterySingleWinner lot = handler.lotsAt(i);
@@ -354,7 +350,7 @@ contract LotteryInvariant_DeployerRegistry is BaseTest, StdInvariant {
     }
 
     /// @notice Registry consistency and deployer/safeOwner ownership expectations.
-    function invariant_registryConsistency() public {
+    function invariant_registryConsistency() public view {
         uint256 n = handler.lotsLength();
         for (uint256 i = 0; i < n; i++) {
             LotterySingleWinner lot = handler.lotsAt(i);
