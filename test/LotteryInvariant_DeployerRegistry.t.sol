@@ -39,8 +39,6 @@ contract InvariantBase is StdInvariant {
 }
 
 /// @notice Handler: fuzz actions. We avoid inheriting Test; we only need Vm + simple bounds.
-/// @dev StdInvariant provides `bound`, but it is internal to the invariant test contract.
-///      So we implement our own `_bound`.
 contract LotteryInvariantHandler {
     Vm internal constant _vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
@@ -303,8 +301,6 @@ contract LotteryInvariantHandler {
 }
 
 contract LotteryInvariant_DeployerRegistry is InvariantBase {
-    Vm internal constant _vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
-
     address internal admin;
     address internal safeOwner;
     address internal creator;
@@ -414,7 +410,6 @@ contract LotteryInvariant_DeployerRegistry is InvariantBase {
             if (typeId != 0) {
                 _assertEq(typeId, deployer.SINGLE_WINNER_TYPE_ID(), "registry typeId mismatch");
                 _assertEqAddr(registry.creatorOf(address(lot)), lot.creator(), "registry creator mismatch");
-                // registry.isRegisteredLottery is external view; ok to call
                 _assertTrue(registry.isRegisteredLottery(address(lot)), "registry says not registered");
             }
         }
