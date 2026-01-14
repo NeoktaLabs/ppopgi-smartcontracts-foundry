@@ -26,4 +26,4 @@ Each raffle is deployed as its own contract instance, ensuring isolation, transp
 These contracts were designed, implemented, and reviewed with the help of **AI agents**.  
 They are extensively tested and documented but remain **experimental** and **unaudited**.
 
-Use at your own risk and only with funds you are comfortable with.
+Use at your own risk and only with funds you are comfortable with
