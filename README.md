@@ -2,7 +2,7 @@
 
 This repository includes a comprehensive **Foundry-based test suite** covering the core smart contracts powering **Ppopgi**, a fully on-chain raffle platform built on Etherlink (Tezos L2).
 
-The purpose of this test suite is to validate correctness, safety assumptions, and edge-case behavior of the contracts under realistic and adversarial conditions.
+The purpose of this test suite is to validate **correctness, safety assumptions, accounting invariants, and edge-case behavior** of the contracts under realistic and adversarial conditions.
 
 **All tests are deterministic, reproducible, and publicly reviewable.**
 
@@ -11,34 +11,39 @@ The purpose of this test suite is to validate correctness, safety assumptions, a
 ## 📦 What’s Inside
 
 The test suite validates all core components of the system:
+
 * **`LotteryRegistry`** — registry integrity, pagination, and authorization.
 * **`SingleWinnerDeployer`** — factory deployment flow, funding, and ownership transfer.
 * **`LotterySingleWinner`** — ticket sales, finalization, randomness, refunds, withdrawals, and admin controls.
-* **External integrations** — mocked randomness (Entropy), ERC20 behavior, and hostile receivers.
+* **External integrations** — mocked randomness (Pyth Entropy), ERC20 behavior, and hostile receivers.
 
 ---
 
 ## 🛡️ Key Properties Verified by Tests
 
-* ✅ Deterministic and verifiable lottery lifecycle
-* ✅ Correct accounting of USDC and native ETH
-* ✅ Pull-based payouts for all participants
-* ✅ Safe cancellation and emergency recovery paths
-* ✅ Protection against malicious or non-standard receivers
-* ✅ Strict authorization for registry and governance actions
-* ✅ Safe handling of external randomness callbacks
-* ✅ Admin powers cannot steal or misroute user funds
-* ✅ Boundary conditions (deadlines, caps, off-by-one cases)
-* ✅ Winner selection correctness at range boundaries (first ticket, last ticket, and edge cases)
-* ✅ Anti-spam economic constraints enforced at deployment time
-* ✅ Full liability exhaustion after withdrawals (`totalReservedUSDC == 0`)
-* ✅ Safety against randomness callback replay
+* ✅ Deterministic and verifiable lottery lifecycle  
+* ✅ Correct accounting of USDC and native ETH under all flows  
+* ✅ Pull-based payouts for all participants  
+* ✅ Safe cancellation and emergency recovery paths  
+* ✅ Protection against malicious or non-standard receivers  
+* ✅ Strict authorization for registry and governance actions  
+* ✅ Safe handling of asynchronous randomness callbacks  
+* ✅ Admin powers cannot steal or misroute user funds  
+* ✅ Boundary conditions (deadlines, caps, off-by-one cases)  
+* ✅ Winner selection correctness at range boundaries  
+* ✅ Anti-spam economic constraints enforced at deployment time  
+* ✅ Full liability exhaustion after withdrawals (`totalReservedUSDC == 0`)  
+* ✅ Safety against randomness callback replay and misbinding  
+* ✅ Claimable balances can never exceed reserved liabilities  
+
+---
 
 ## 🔁 Invariant Testing (Stateful Fuzzing)
 
 In addition to traditional unit and integration tests, this repository includes **stateful invariant tests** implemented using Foundry’s `StdInvariant` framework.
 
-Invariant testing verifies that **critical safety properties always hold**, regardless of the order, frequency, or combination of valid contract interactions.  
+Invariant testing verifies that **critical safety properties always hold**, regardless of the order, frequency, or combination of valid contract interactions.
+
 Instead of asserting outcomes of specific scenarios, invariants assert **global truths** that must never be violated.
 
 ---
@@ -46,14 +51,15 @@ Instead of asserting outcomes of specific scenarios, invariants assert **global 
 ### 🎯 Why Invariant Testing Matters
 
 Lottery-style contracts have:
-- Complex state machines
-- Multiple actors with different privileges
-- Asynchronous randomness callbacks
-- Long-lived accounting obligations
+
+- Complex state machines  
+- Multiple actors with different privileges  
+- Asynchronous randomness callbacks  
+- Long-lived accounting obligations  
 
 These characteristics make them especially vulnerable to **unexpected interaction sequences** that are difficult to reason about manually.
 
-Invariant testing explores *thousands of randomized call sequences* and ensures that **fund safety and registry correctness are preserved at all times**.
+Invariant testing explores *thousands of randomized call sequences* and ensures that **fund safety, accounting correctness, and registry integrity are preserved at all times**.
 
 ---
 
@@ -67,39 +73,62 @@ The invariant test suite (`LotteryInvariant_DeployerRegistry.t.sol`) continuousl
 
 The following invariants are enforced:
 
-#### 🔐 Financial Solvency Invariants
+---
+
+#### 🔐 Financial Solvency & Accounting Invariants
 
 These guarantees must **always** hold, regardless of user behavior, admin actions, or randomness timing:
 
 - `USDC.balanceOf(lottery) >= totalReservedUSDC`  
   Ensures the contract can always cover all outstanding USDC liabilities.
+
 - `address(lottery).balance >= totalClaimableNative`  
   Ensures all claimable native ETH is fully backed.
-- All withdrawals reduce liabilities correctly.
-- Sweep functions can never steal user or protocol funds.
 
-#### 🧭 Lifecycle & State Machine Invariants
+- `Σ claimableFunds(known actors + winner) ≤ totalReservedUSDC`  
+  Prevents over-allocation of USDC liabilities.
 
-- `activeDrawings ∈ {0, 1}` at all times.
+- `Σ claimableNative(known actors) ≤ totalClaimableNative`  
+  Prevents over-allocation of native ETH claimables.
+
+- All withdrawals correctly reduce tracked liabilities.
+
+- Sweep functions can **never** extract funds required to satisfy user or protocol claims.
+
+These invariants collectively prove that **funds cannot be silently over-credited or drained**, even under adversarial sequencing.
+
+---
+
+#### 🧭 Lifecycle & Randomness State Machine Invariants
+
+- `activeDrawings ∈ {0, 1}` at all times.  
 - A lottery in `Drawing` state must:
-  - Have a valid entropy request ID
-  - Have a recorded draw timestamp
-  - Have non-zero sold tickets
-- A lottery in `Open` state must not have an active entropy request.
+  - Have a non-zero entropy request ID  
+  - Have a recorded `drawingRequestedAt` timestamp  
+  - Have a non-zero `soldAtDrawing` snapshot  
+- A lottery in `Open` state must not have an active entropy request.  
+- Any entropy callback with:
+  - the wrong sequence number,
+  - the wrong provider, or
+  - the wrong lifecycle state  
+  **cannot resolve a draw or alter state**.
 
-These checks ensure **no invalid or partially-initialized states** can persist.
+These checks ensure **randomness requests and callbacks are strictly bound to the correct draw** and cannot be replayed or misused.
+
+---
 
 #### 🗂️ Registry & Deployer Consistency Invariants
 
 - Every deployed lottery:
   - Has `deployer == SingleWinnerDeployer`
   - Has `owner == safeOwner`
-- If a lottery is registered:
-  - Its `typeId` is correct and immutable
-  - The registry’s recorded creator matches the lottery’s creator
-  - `isRegisteredLottery(lottery)` remains true forever
 
-This proves that the registry behaves as an **append-only, non-corruptible source of truth**, even if registration failures occur during deployment.
+- If a lottery is registered:
+  - Its `typeId` is correct and immutable  
+  - The registry’s recorded creator matches the lottery’s creator  
+  - `isRegisteredLottery(lottery)` remains true  
+
+This proves that the registry behaves as an **append-only, non-corruptible source of truth**, even if partial failures occur during deployment.
 
 ---
 
@@ -107,16 +136,16 @@ This proves that the registry behaves as an **append-only, non-corruptible sourc
 
 During invariant testing, the system is subjected to randomized sequences of valid actions, including:
 
-- Deploying new lotteries
-- Buying tickets
-- Finalizing lotteries
-- Fulfilling randomness callbacks
-- Canceling and force-canceling lotteries
-- Claiming refunds
-- Withdrawing USDC and native ETH
-- Sweeping surplus funds
-- Updating deployer configuration
-- Arbitrary time warping
+- Deploying new lotteries  
+- Buying tickets  
+- Finalizing lotteries  
+- Fulfilling randomness callbacks (including malformed or replayed callbacks)  
+- Canceling and force-canceling lotteries  
+- Claiming refunds  
+- Withdrawing USDC and native ETH  
+- Sweeping surplus funds  
+- Updating deployer configuration  
+- Arbitrary time warping  
 
 All actions are executed by randomized actors under realistic constraints.
 
@@ -124,14 +153,16 @@ All actions are executed by randomized actors under realistic constraints.
 
 ### 📈 Coverage & Confidence
 
-- Each invariant is executed across **hundreds of randomized runs**
-- Each run performs **tens of thousands of contract calls**
-- No reverts, discards, or invariant violations were observed in the current configuration
+- Each invariant is executed across **hundreds of randomized runs**  
+- Each run performs **tens of thousands of contract calls**  
+- No invariant violations were observed in the current configuration  
 
 This provides strong evidence that:
-- Accounting remains correct under adversarial sequencing
-- Governance actions cannot break safety guarantees
-- Registry integrity is preserved across the system’s lifetime
+
+- Accounting remains correct under adversarial sequencing  
+- Governance actions cannot violate solvency guarantees  
+- Randomness handling is lifecycle-safe  
+- Registry integrity is preserved across the system’s lifetime  
 
 > Invariant testing does not prove the absence of all bugs,  
 > but it significantly raises confidence that **entire classes of bugs cannot exist**.
@@ -142,9 +173,11 @@ This provides strong evidence that:
 
 Invariant tests **complement**, not replace, unit and integration tests:
 
-- Unit tests verify *specific expected behaviors*
+- Unit tests verify *specific expected behaviors*  
+- Integration tests verify *end-to-end flows*  
 - Invariants verify *global safety properties*
-- Together, they provide defense-in-depth against both logic bugs and emergent behavior
+
+Together, they provide **defense-in-depth** against both logic bugs and emergent behavior.
 
 ---
 
