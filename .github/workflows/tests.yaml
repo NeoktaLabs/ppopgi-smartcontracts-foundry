@@ -15,7 +15,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: nightly
+          version: stable
 
       - name: Show versions
         run: |
@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           forge install OpenZeppelin/openzeppelin-contracts@v5.0.1
-          forge install pyth-network/entropy-sdk-solidity
+          git clone https://github.com/pyth-network/entropy-sdk-solidity.git lib/entropy-sdk-solidity
 
       - name: Run tests
         run: forge test -vv
