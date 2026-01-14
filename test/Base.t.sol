@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "forge-std/StdInvariant.sol";
+import "forge-std/Test.sol";
 
 import "../src/LotteryRegistry.sol";
 import "../src/SingleWinnerDeployer.sol";
@@ -11,8 +11,8 @@ import "./mocks/MockUSDC.sol";
 import "./mocks/MockEntropy.sol";
 import "./mocks/RevertingReceiver.sol";
 
-contract BaseTest is StdInvariant {
-    // Use deterministic Foundry-generated addresses to avoid Solidity checksum-literal errors
+contract BaseTest is Test {
+    // Use deterministic Foundry-generated addresses to avoid Solidity 0.8.33 checksum-literal errors
     address internal admin;
     address internal safeOwner;
     address internal creator;
