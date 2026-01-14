@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
-import "lib/openzeppelin-contracts/lib/forge-std/src/StdInvariant.sol";
+import "forge-std/StdInvariant.sol";
 
 import "./Base.t.sol";
 
