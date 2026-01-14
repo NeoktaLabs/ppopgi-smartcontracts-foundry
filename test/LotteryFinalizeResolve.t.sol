@@ -1,113 +1,79 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/**
- * @title LotteryRegistry
- * @notice A minimal, “forever” on-chain registry for lottery instances.
- */
-contract LotteryRegistry {
-    error NotOwner();
-    error ZeroAddress();
-    error NotRegistrar();
-    error AlreadyRegistered();
-    error InvalidTypeId();
-    error NotContract();
+import "./Base.t.sol";
 
-    event OwnershipTransferred(address indexed oldOwner, address indexed newOwner);
-    event RegistrarSet(address indexed registrar, bool authorized);
-    event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
-
-    address public owner;
-
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
-        _;
+contract LotteryFinalizeResolveTest is BaseTest {
+    function setUp() public override {
+        super.setUp();
+        lottery = _deployDefaultLottery();
     }
 
-    constructor(address _owner) {
-        if (_owner == address(0)) revert ZeroAddress();
-        owner = _owner;
-        emit OwnershipTransferred(address(0), _owner);
+    function test_FinalizeRevertsIfNotReady() public {
+        vm.expectRevert(LotterySingleWinner.NotReadyToFinalize.selector);
+        vm.prank(buyer1);
+        lottery.finalize{value: 0.01 ether}();
     }
 
-    function transferOwnership(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert ZeroAddress();
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
+    function test_FinalizeThenResolve_AllocationsCorrect() public {
+        vm.startPrank(buyer1);
+        usdc.approve(address(lottery), type(uint256).max);
+        lottery.buyTickets(3);
+        vm.stopPrank();
+
+        vm.warp(lottery.deadline());
+        uint256 fee = entropy.getFee(provider);
+
+        vm.prank(buyer2);
+        lottery.finalize{value: fee}();
+
+        assertEq(uint256(lottery.status()), uint256(LotterySingleWinner.Status.Drawing));
+        uint64 reqId = lottery.entropyRequestId();
+        assertTrue(reqId != 0);
+
+        entropy.fulfill(reqId, bytes32(uint256(7)));
+
+        assertEq(uint256(lottery.status()), uint256(LotterySingleWinner.Status.Completed));
+        assertEq(lottery.winner(), buyer1);
+
+        uint256 winningPot = lottery.winningPot();
+        uint256 ticketRevenue = lottery.ticketRevenue();
+
+        uint256 feePot = (winningPot * 10) / 100;
+        uint256 feeRev = (ticketRevenue * 10) / 100;
+
+        uint256 winnerAmount = winningPot - feePot;
+        uint256 creatorNet = ticketRevenue - feeRev;
+        uint256 protocolAmount = feePot + feeRev;
+
+        assertEq(lottery.claimableFunds(buyer1), winnerAmount);
+        assertEq(lottery.claimableFunds(creator), creatorNet);
+        assertEq(lottery.claimableFunds(feeRecipient), protocolAmount);
     }
 
-    address[] public allLotteries;
-    mapping(address => uint256) public typeIdOf;
-    mapping(address => address) public creatorOf;
-    mapping(address => uint64) public registeredAt;
-    mapping(uint256 => address[]) internal lotteriesByType;
-    mapping(address => bool) public isRegistrar;
-
-    modifier onlyRegistrar() {
-        if (!isRegistrar[msg.sender]) revert NotRegistrar();
-        _;
+    function test_CallbackUnauthorized() public {
+        vm.expectRevert(LotterySingleWinner.UnauthorizedCallback.selector);
+        lottery.entropyCallback(1, provider, bytes32(uint256(1)));
     }
 
-    function setRegistrar(address registrar, bool authorized) external onlyOwner {
-        if (registrar == address(0)) revert ZeroAddress();
-        isRegistrar[registrar] = authorized;
-        emit RegistrarSet(registrar, authorized);
-    }
+    function test_CallbackWrongSequenceRejected_NoStateChange() public {
+        vm.startPrank(buyer1);
+        usdc.approve(address(lottery), type(uint256).max);
+        lottery.buyTickets(3);
+        vm.stopPrank();
 
-    function registerLottery(uint256 typeId, address lottery, address creator) external onlyRegistrar {
-        if (lottery == address(0) || creator == address(0)) revert ZeroAddress();
-        if (typeId == 0) revert InvalidTypeId();
-        if (typeIdOf[lottery] != 0) revert AlreadyRegistered();
-        if (lottery.code.length == 0) revert NotContract();
+        vm.warp(lottery.deadline());
+        uint256 fee = entropy.getFee(provider);
 
-        allLotteries.push(lottery);
-        typeIdOf[lottery] = typeId;
-        creatorOf[lottery] = creator;
-        registeredAt[lottery] = uint64(block.timestamp);
+        vm.prank(buyer2);
+        lottery.finalize{value: fee}();
 
-        lotteriesByType[typeId].push(lottery);
+        uint64 realId = lottery.entropyRequestId();
 
-        emit LotteryRegistered(allLotteries.length - 1, typeId, lottery, creator);
-    }
+        vm.prank(address(entropy));
+        lottery.entropyCallback(realId + 999, provider, bytes32(uint256(1)));
 
-    function isRegisteredLottery(address lottery) external view returns (bool) {
-        return typeIdOf[lottery] != 0;
-    }
-
-    function getAllLotteriesCount() external view returns (uint256) {
-        return allLotteries.length;
-    }
-
-    function getLotteriesByTypeCount(uint256 typeId) external view returns (uint256) {
-        return lotteriesByType[typeId].length;
-    }
-
-    function getLotteryByTypeAtIndex(uint256 typeId, uint256 index) external view returns (address) {
-        return lotteriesByType[typeId][index];
-    }
-
-    function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
-        uint256 n = allLotteries.length;
-        if (start >= n || limit == 0) return new address;
-        uint256 end = start + limit;
-        if (end > n) end = n;
-
-        page = new address[](end - start);
-        for (uint256 i = start; i < end; i++) {
-            page[i - start] = allLotteries[i];
-        }
-    }
-
-    function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit) external view returns (address[] memory page) {
-        address[] storage arr = lotteriesByType[typeId];
-        uint256 n = arr.length;
-        if (start >= n || limit == 0) return new address;
-        uint256 end = start + limit;
-        if (end > n) end = n;
-
-        page = new address[](end - start);
-        for (uint256 i = start; i < end; i++) {
-            page[i - start] = arr[i];
-        }
+        assertEq(uint256(lottery.status()), uint256(LotterySingleWinner.Status.Drawing));
+        assertEq(lottery.entropyRequestId(), realId);
     }
 }
