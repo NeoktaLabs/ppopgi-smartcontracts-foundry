@@ -10,30 +10,18 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Configure git auth for clones
-        run: |
-          git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: stable
 
-      - name: Show versions
-        run: |
-          forge --version
-          cast --version
-          git --version
-
       - name: Install dependencies
         run: |
           forge install OpenZeppelin/openzeppelin-contracts@v5.0.1
-          git clone https://github.com/pyth-network/entropy-sdk-solidity.git lib/entropy-sdk-solidity
 
       - name: Run tests
         run: forge test -vv
