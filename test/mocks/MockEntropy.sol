@@ -3,7 +3,8 @@ pragma solidity ^0.8.24;
 
 import "../../src/vendor/pyth/IEntropy.sol";
 
-interface IEntropyConsumer {
+// Renamed to avoid collision with IEntropyConsumer declared in LotterySingleWinner.sol
+interface IMockEntropyConsumer {
     function entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external;
 }
 
@@ -41,7 +42,7 @@ contract MockEntropy is IEntropy {
         Req memory r = reqs[id];
         require(r.exists, "unknown request");
 
-        IEntropyConsumer(r.consumer).entropyCallback(id, r.provider, rand);
+        IMockEntropyConsumer(r.consumer).entropyCallback(id, r.provider, rand);
         delete reqs[id];
     }
 }
