@@ -39,8 +39,9 @@ contract LotteryFinalizeResolveTest is BaseTest {
         uint256 winningPot = lottery.winningPot();
         uint256 ticketRevenue = lottery.ticketRevenue();
 
-        uint256 feePot = (winningPot * 10) / 100;
-        uint256 feeRev = (ticketRevenue * 10) / 100;
+        uint256 pct = lottery.protocolFeePercent();
+        uint256 feePot = (winningPot * pct) / 100;
+        uint256 feeRev = (ticketRevenue * pct) / 100;
 
         uint256 winnerAmount = winningPot - feePot;
         uint256 creatorNet = ticketRevenue - feeRev;
@@ -202,5 +203,64 @@ contract LotteryFinalizeResolveTest is BaseTest {
         entropy.fulfill(reqId, bytes32(uint256(4)));
 
         assertEq(lottery.winner(), buyer2);
+    }
+
+    function test_FinalizeSucceedsWhenMaxTicketsReached_BeforeDeadline() public {
+        // Deploy a lottery with a small maxTickets so we can reach it in tests.
+        // Keep other defaults consistent with BaseTest.
+        uint64 maxTix = 5;
+        uint64 minTix = 1;
+
+        LotterySingleWinner.LotteryParams memory params = LotterySingleWinner.LotteryParams({
+            usdcToken: address(usdc),
+            entropy: address(entropy),
+            entropyProvider: provider,
+            feeRecipient: feeRecipient,
+            protocolFeePercent: protocolFeePercent,
+            creator: creator,
+            name: "MaxTicketsLottery",
+            ticketPrice: 2 * 1e6,     // 2 USDC
+            winningPot: 100 * 1e6,    // 100 USDC
+            minTickets: minTix,
+            maxTickets: maxTix,
+            durationSeconds: 30 days, // far in the future, so we're NOT relying on deadline
+            minPurchaseAmount: 0
+        });
+
+        // Fund + confirm + open (mirror how deployer would do it)
+        LotterySingleWinner l = new LotterySingleWinner(params);
+
+        vm.startPrank(address(this));
+        // BaseTest should own MockUSDC minting; adjust if your MockUSDC uses a different mint mechanism.
+        // If your BaseTest already prefunds creator, you can instead `prank(creator)` and transferFrom.
+        usdc.mint(address(this), params.winningPot);
+        usdc.approve(address(l), params.winningPot);
+        usdc.transfer(address(l), params.winningPot);
+        l.confirmFunding();
+        vm.stopPrank();
+
+        // Buy exactly maxTickets
+        vm.startPrank(buyer1);
+        usdc.approve(address(l), type(uint256).max);
+        l.buyTickets(maxTix);
+        vm.stopPrank();
+
+        assertEq(l.getSold(), maxTix);
+        assertTrue(block.timestamp < l.deadline());
+
+        uint256 fee = entropy.getFee(provider);
+
+        // Should finalize even though not expired because it's "full"
+        vm.prank(buyer2);
+        l.finalize{value: fee}();
+
+        assertEq(uint256(l.status()), uint256(LotterySingleWinner.Status.Drawing));
+
+        // Resolve to ensure it completes cleanly
+        uint64 reqId = l.entropyRequestId();
+        entropy.fulfill(reqId, bytes32(uint256(1)));
+
+        assertEq(uint256(l.status()), uint256(LotterySingleWinner.Status.Completed));
+        assertTrue(l.winner() != address(0));
     }
 }
