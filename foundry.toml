@@ -4,6 +4,5 @@ out = "out"
 libs = ["lib"]
 
 remappings = [
-  "@openzeppelin/=lib/openzeppelin-contracts/",
-  "@pythnetwork/=lib/entropy-sdk-solidity/"
+  "@openzeppelin/=lib/openzeppelin-contracts/"
 ]

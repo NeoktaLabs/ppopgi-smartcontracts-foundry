@@ -12,13 +12,14 @@ import "./mocks/MockEntropy.sol";
 import "./mocks/RevertingReceiver.sol";
 
 contract BaseTest is Test {
-    address internal admin = address(0xA11CE);
-    address internal safeOwner = address(0xSAFE);
-    address internal creator = address(0xC0FFEE);
-    address internal buyer1 = address(0xB001);
-    address internal buyer2 = address(0xB002);
-    address internal feeRecipient = address(0xFEE1);
-    address internal provider = address(0xPR0V);
+    // Valid hex-only addresses (20-byte recommended)
+    address internal admin        = address(0x000000000000000000000000000000000000A11C);
+    address internal safeOwner    = address(0x0000000000000000000000000000000000005AFE);
+    address internal creator      = address(0x0000000000000000000000000000000000C0FFEE);
+    address internal buyer1       = address(0x000000000000000000000000000000000000B001);
+    address internal buyer2       = address(0x000000000000000000000000000000000000B002);
+    address internal feeRecipient = address(0x000000000000000000000000000000000000FEE1);
+    address internal provider     = address(0x0000000000000000000000000000000000001234);
 
     LotteryRegistry internal registry;
     SingleWinnerDeployer internal deployer;
@@ -44,16 +45,19 @@ contract BaseTest is Test {
             address(entropy),
             provider,
             feeRecipient,
-            10
+            10 // 10%
         );
 
         registry.setRegistrar(address(deployer), true);
+
         vm.stopPrank();
 
+        // Mint balances
         usdc.mint(creator, 50_000_000 * 1e6);
         usdc.mint(buyer1, 50_000_000 * 1e6);
         usdc.mint(buyer2, 50_000_000 * 1e6);
 
+        // Give native ETH to actors
         vm.deal(creator, 100 ether);
         vm.deal(buyer1, 100 ether);
         vm.deal(buyer2, 100 ether);
@@ -70,12 +74,12 @@ contract BaseTest is Test {
 
         address lotAddr = deployer.createSingleWinnerLottery(
             "Test Lottery",
-            2 * 1e6,
-            winningPot,
-            3,
-            0,
-            3600,
-            0
+            2 * 1e6,        // ticket price
+            winningPot,     // winning pot
+            3,              // minTickets
+            0,              // maxTickets (0 = uncapped)
+            3600,           // duration seconds
+            0               // minPurchaseAmount
         );
 
         vm.stopPrank();
