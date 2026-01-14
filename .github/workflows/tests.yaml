@@ -3,22 +3,29 @@ name: Forge tests
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: nightly
 
+      - name: Show versions
+        run: |
+          forge --version
+          cast --version
+
       - name: Install dependencies
         run: |
-          forge install OpenZeppelin/openzeppelin-contracts@v5.0.1 --no-commit
-          forge install pyth-network/entropy-sdk-solidity --no-commit
+          forge install OpenZeppelin/openzeppelin-contracts@v5.0.1
+          forge install pyth-network/entropy-sdk-solidity
 
       - name: Run tests
         run: forge test -vv
