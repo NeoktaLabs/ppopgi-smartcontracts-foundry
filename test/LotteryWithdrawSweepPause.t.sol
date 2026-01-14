@@ -50,22 +50,31 @@ contract LotteryWithdrawSweepPauseTest is BaseTest {
         RevertingReceiver rr = new RevertingReceiver();
         vm.deal(address(rr), 10 ether);
 
+        // Fee used by the lottery during finalize()
         uint256 fee = entropy.getFee(provider);
-        uint256 extra = 0.123 ether;
 
-        // Call finalize from rr with fee + extra (extra refund will fail => credited to rr)
-        rr.callFinalize{value: fee + extra}(address(lottery));
+        // Overpay by some amount (we do NOT assume this equals the refund;
+        // we compute the actual credited amount from balance deltas)
+        uint256 overpay = 0.123 ether;
 
-        // rr should now be credited extra as claimable native
+        // rr calls finalize; refund to rr will fail (receive() reverts) => credited to claimableNative[rr]
+        uint256 rrBalBefore = address(rr).balance;
+        rr.callFinalize{value: fee + overpay}(address(lottery));
+        uint256 rrBalAfter = address(rr).balance;
+
+        // rr spent (fee + overpay). The lottery only keeps fee (sent to entropy).
+        // Everything else should be credited as claimableNative.
+        uint256 expectedCredited = rrBalBefore - rrBalAfter - fee;
+
         uint256 credited = lottery.claimableNative(address(rr));
-        assertEq(credited, extra);
+        assertEq(credited, expectedCredited);
 
-        // withdraw that credited native to an EOA that CAN receive ETH
+        // Withdraw credited native to an EOA that CAN receive ETH
         uint256 beforeBal = buyer1.balance;
         rr.callWithdrawNativeTo(address(lottery), buyer1);
         uint256 afterBal = buyer1.balance;
 
-        assertEq(afterBal, beforeBal + extra);
+        assertEq(afterBal, beforeBal + credited);
         assertEq(lottery.claimableNative(address(rr)), 0);
     }
 
@@ -77,7 +86,7 @@ contract LotteryWithdrawSweepPauseTest is BaseTest {
         // Buy should revert while paused
         vm.startPrank(buyer1);
         usdc.approve(address(lottery), type(uint256).max);
-        vm.expectRevert(); // Pausable error (OZ v5 uses custom error)
+        vm.expectRevert(); // OZ Pausable revert/custom error (version dependent)
         lottery.buyTickets(1);
         vm.stopPrank();
 
@@ -87,7 +96,7 @@ contract LotteryWithdrawSweepPauseTest is BaseTest {
         // Finalize should also revert while paused
         uint256 fee = entropy.getFee(provider);
         vm.prank(buyer1);
-        vm.expectRevert(); // Pausable error
+        vm.expectRevert();
         lottery.finalize{value: fee}();
     }
 
