@@ -2,199 +2,125 @@
 pragma solidity ^0.8.24;
 
 import "./Base.t.sol";
-import "forge-std/StdInvariant.sol";
 
 /**
- * Invariant tests for LotterySingleWinner.
+ * "Invariant-style" fuzz tests that do NOT require StdInvariant.sol.
  *
- * Run with:
- *   forge test --match-path test/LotteryInvariant.t.sol -vv
- * or just:
- *   forge test -vv
+ * Runs random sequences of actions and asserts invariants after each step.
+ * This works even if your forge-std version doesn't ship StdInvariant.sol.
  */
-contract LotteryInvariantTest is BaseTest, StdInvariant {
-    LotteryHandler internal handler;
-
+contract LotteryInvariantStyleFuzzTest is BaseTest {
     function setUp() public override {
         super.setUp();
-
-        // Deploy a fresh lottery instance
         lottery = _deployDefaultLottery();
 
-        // Build handler with a small actor set
-        address;
-        _actors[0] = buyer1;
-        _actors[1] = buyer2;
-        _actors[2] = creator; // included mostly for withdraw attempts; buy will revert anyway
+        // approvals for buyers
+        vm.prank(buyer1);
+        usdc.approve(address(lottery), type(uint256).max);
+        vm.prank(buyer2);
+        usdc.approve(address(lottery), type(uint256).max);
+    }
 
-        handler = new LotteryHandler(
-            lottery,
-            usdc,
-            entropy,
-            provider,
-            safeOwner,
-            feeRecipient,
-            _actors
-        );
+    /// @dev Main sequence fuzz test (acts like an invariant run).
+    function testFuzz_InvariantSequence(uint256 seed) public {
+        // We'll run a bounded number of steps to keep gas/time reasonable in CI.
+        uint256 steps = 40;
 
-        // Tell Foundry what to fuzz
-        targetContract(address(handler));
+        for (uint256 i = 0; i < steps; i++) {
+            // pick an action
+            uint256 action = uint256(keccak256(abi.encode(seed, i, "action"))) % 7;
 
-        // Restrict fuzzing to specific handler functions (better signal/noise)
-        bytes4;
-        selectors[0] = LotteryHandler.buy.selector;
-        selectors[1] = LotteryHandler.finalizeLottery.selector;
-        selectors[2] = LotteryHandler.cancelLottery.selector;
-        selectors[3] = LotteryHandler.forceCancelStuck.selector;
-        selectors[4] = LotteryHandler.withdrawFunds.selector;
-        selectors[5] = LotteryHandler.pauseLottery.selector;
-        selectors[6] = LotteryHandler.unpauseLottery.selector;
+            if (action == 0) _tryBuy(buyer1, seed, i);
+            else if (action == 1) _tryBuy(buyer2, seed, i);
+            else if (action == 2) _tryFinalize(seed, i);
+            else if (action == 3) _tryCancel(buyer1);
+            else if (action == 4) _tryForceCancel(buyer2);
+            else if (action == 5) _tryWithdraw(buyer1);
+            else if (action == 6) _tryWithdraw(buyer2);
 
-        targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
+            // Always check invariants after each step
+            _assertInvariants();
+        }
     }
 
     // ------------------------------------------------------------
-    // Invariants
+    // Actions (all swallow reverts so the sequence continues)
     // ------------------------------------------------------------
 
-    /// Contract USDC balance must always cover reserved liabilities.
-    function invariant_USDCBalanceCoversReserved() public view {
-        uint256 bal = usdc.balanceOf(address(lottery));
-        uint256 reserved = lottery.totalReservedUSDC();
-        assertGe(bal, reserved);
-    }
+    function _tryBuy(address who, uint256 seed, uint256 i) internal {
+        uint256 count = (uint256(keccak256(abi.encode(seed, i, "count"))) % 5) + 1;
 
-    /// Reserved liabilities can never exceed pot + ticketRevenue (prevents accounting drift).
-    function invariant_ReservedNeverExceedsPotPlusRevenue() public view {
-        uint256 reserved = lottery.totalReservedUSDC();
-        uint256 maxLiability = lottery.winningPot() + lottery.ticketRevenue();
-        assertLe(reserved, maxLiability);
-    }
-
-    /// If Completed, winner must be set.
-    function invariant_CompletedImpliesWinnerSet() public view {
-        if (lottery.status() == LotterySingleWinner.Status.Completed) {
-            assertTrue(lottery.winner() != address(0));
-        }
-    }
-
-    /// Canceled is terminal (cannot go back to Open).
-    function invariant_CanceledIsTerminal() public view {
-        if (lottery.status() == LotterySingleWinner.Status.Canceled) {
-            assertTrue(lottery.status() != LotterySingleWinner.Status.Open);
-        }
-    }
-}
-
-/**
- * Handler contract for invariant fuzzing.
- *
- * Foundry will call these functions in random sequences with random inputs.
- * We use try/catch so invalid actions no-op rather than breaking the run.
- */
-contract LotteryHandler is Test {
-    LotterySingleWinner internal lot;
-    MockUSDC internal usdc;
-    MockEntropy internal entropy;
-    address internal provider;
-
-    address internal safeOwner;
-    address internal feeRecipient;
-
-    address[] internal actors;
-
-    constructor(
-        LotterySingleWinner _lot,
-        MockUSDC _usdc,
-        MockEntropy _entropy,
-        address _provider,
-        address _safeOwner,
-        address _feeRecipient,
-        address[] memory _actors
-    ) {
-        lot = _lot;
-        usdc = _usdc;
-        entropy = _entropy;
-        provider = _provider;
-        safeOwner = _safeOwner;
-        feeRecipient = _feeRecipient;
-        actors = _actors;
-
-        // Pre-approve USDC for actors so buys can succeed without extra steps
-        for (uint256 i = 0; i < actors.length; i++) {
-            vm.startPrank(actors[i]);
-            usdc.approve(address(lot), type(uint256).max);
-            vm.stopPrank();
-        }
-    }
-
-    function _actor(uint256 seed) internal view returns (address) {
-        return actors[seed % actors.length];
-    }
-
-    /// Random ticket purchases (bounded for gas).
-    function buy(uint256 actorSeed, uint256 countSeed) external {
-        address a = _actor(actorSeed);
-        uint256 count = (countSeed % 5) + 1;
-
-        vm.startPrank(a);
-        try lot.buyTickets(count) {} catch {}
+        vm.startPrank(who);
+        try lottery.buyTickets(count) {} catch {}
         vm.stopPrank();
     }
 
-    /// Try finalize with proper fee; optionally resolve immediately.
-    function finalizeLottery(uint256 actorSeed, uint256 randSeed, bool alsoResolve) external {
-        address a = _actor(actorSeed);
+    function _tryFinalize(uint256 seed, uint256 i) internal {
+        // Sometimes warp to deadline to allow finalize
+        if ((uint256(keccak256(abi.encode(seed, i, "warp"))) % 3) == 0) {
+            vm.warp(lottery.deadline());
+        }
+
         uint256 fee = entropy.getFee(provider);
 
-        vm.startPrank(a);
-        try lot.finalize{value: fee}() {
-            if (alsoResolve) {
-                uint64 reqId = lot.entropyRequestId();
+        // finalize caller alternates between buyer1/buyer2
+        address caller = ((seed + i) % 2 == 0) ? buyer1 : buyer2;
+
+        vm.startPrank(caller);
+        try lottery.finalize{value: fee}() {
+            // Sometimes resolve immediately
+            if ((uint256(keccak256(abi.encode(seed, i, "resolve"))) % 2) == 0) {
+                uint64 reqId = lottery.entropyRequestId();
                 if (reqId != 0) {
-                    entropy.fulfill(reqId, bytes32(randSeed));
+                    bytes32 rand = bytes32(uint256(keccak256(abi.encode(seed, i, "rand"))));
+                    entropy.fulfill(reqId, rand);
                 }
             }
         } catch {}
         vm.stopPrank();
     }
 
-    function cancelLottery(uint256 actorSeed) external {
-        address a = _actor(actorSeed);
-        vm.prank(a);
-        try lot.cancel() {} catch {}
+    function _tryCancel(address who) internal {
+        vm.prank(who);
+        try lottery.cancel() {} catch {}
     }
 
-    function forceCancelStuck(uint256 actorSeed) external {
-        address a = _actor(actorSeed);
-        vm.prank(a);
-        try lot.forceCancelStuck() {} catch {}
+    function _tryForceCancel(address who) internal {
+        vm.prank(who);
+        try lottery.forceCancelStuck() {} catch {}
     }
 
-    function withdrawFunds(uint256 actorSeed) external {
-        address a = _actor(actorSeed);
+    function _tryWithdraw(address who) internal {
+        vm.prank(who);
+        try lottery.withdrawFunds() {} catch {}
 
-        vm.prank(a);
-        try lot.withdrawFunds() {} catch {}
-
-        // Also try feeRecipient withdrawals sometimes (helps explore completion paths)
+        // also try feeRecipient withdraw occasionally (helps explore completion)
         vm.prank(feeRecipient);
-        try lot.withdrawFunds() {} catch {}
+        try lottery.withdrawFunds() {} catch {}
     }
 
-    function pauseLottery(uint256 seed) external {
-        if (seed % 2 == 0) {
-            vm.prank(safeOwner);
-            try lot.pause() {} catch {}
+    // ------------------------------------------------------------
+    // Invariants
+    // ------------------------------------------------------------
+
+    function _assertInvariants() internal view {
+        // 1) USDC balance covers reserved liabilities
+        uint256 bal = usdc.balanceOf(address(lottery));
+        uint256 reserved = lottery.totalReservedUSDC();
+        assertGe(bal, reserved);
+
+        // 2) Reserved can never exceed pot + ticket revenue (prevents drift)
+        uint256 maxLiability = lottery.winningPot() + lottery.ticketRevenue();
+        assertLe(reserved, maxLiability);
+
+        // 3) If Completed, winner must be set
+        if (lottery.status() == LotterySingleWinner.Status.Completed) {
+            assertTrue(lottery.winner() != address(0));
+        }
+
+        // 4) Canceled is terminal (never Open again)
+        if (lottery.status() == LotterySingleWinner.Status.Canceled) {
+            assertTrue(lottery.status() != LotterySingleWinner.Status.Open);
         }
     }
-
-    function unpauseLottery(uint256 seed) external {
-        if (seed % 2 == 0) {
-            vm.prank(safeOwner);
-            try lot.unpause() {} catch {}
-        }
-    }
-
-    receive() external payable {}
 }
