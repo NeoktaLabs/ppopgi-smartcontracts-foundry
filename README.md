@@ -34,6 +34,118 @@ The test suite validates all core components of the system:
 * ✅ Full liability exhaustion after withdrawals (`totalReservedUSDC == 0`)
 * ✅ Safety against randomness callback replay
 
+## 🔁 Invariant Testing (Stateful Fuzzing)
+
+In addition to traditional unit and integration tests, this repository includes **stateful invariant tests** implemented using Foundry’s `StdInvariant` framework.
+
+Invariant testing verifies that **critical safety properties always hold**, regardless of the order, frequency, or combination of valid contract interactions.  
+Instead of asserting outcomes of specific scenarios, invariants assert **global truths** that must never be violated.
+
+---
+
+### 🎯 Why Invariant Testing Matters
+
+Lottery-style contracts have:
+- Complex state machines
+- Multiple actors with different privileges
+- Asynchronous randomness callbacks
+- Long-lived accounting obligations
+
+These characteristics make them especially vulnerable to **unexpected interaction sequences** that are difficult to reason about manually.
+
+Invariant testing explores *thousands of randomized call sequences* and ensures that **fund safety and registry correctness are preserved at all times**.
+
+---
+
+### 🧪 Invariants Implemented
+
+The invariant test suite (`LotteryInvariant_DeployerRegistry.t.sol`) continuously fuzzes interactions across:
+
+- `SingleWinnerDeployer`
+- `LotteryRegistry`
+- Multiple `LotterySingleWinner` instances
+
+The following invariants are enforced:
+
+#### 🔐 Financial Solvency Invariants
+
+These guarantees must **always** hold, regardless of user behavior, admin actions, or randomness timing:
+
+- `USDC.balanceOf(lottery) >= totalReservedUSDC`  
+  Ensures the contract can always cover all outstanding USDC liabilities.
+- `address(lottery).balance >= totalClaimableNative`  
+  Ensures all claimable native ETH is fully backed.
+- All withdrawals reduce liabilities correctly.
+- Sweep functions can never steal user or protocol funds.
+
+#### 🧭 Lifecycle & State Machine Invariants
+
+- `activeDrawings ∈ {0, 1}` at all times.
+- A lottery in `Drawing` state must:
+  - Have a valid entropy request ID
+  - Have a recorded draw timestamp
+  - Have non-zero sold tickets
+- A lottery in `Open` state must not have an active entropy request.
+
+These checks ensure **no invalid or partially-initialized states** can persist.
+
+#### 🗂️ Registry & Deployer Consistency Invariants
+
+- Every deployed lottery:
+  - Has `deployer == SingleWinnerDeployer`
+  - Has `owner == safeOwner`
+- If a lottery is registered:
+  - Its `typeId` is correct and immutable
+  - The registry’s recorded creator matches the lottery’s creator
+  - `isRegisteredLottery(lottery)` remains true forever
+
+This proves that the registry behaves as an **append-only, non-corruptible source of truth**, even if registration failures occur during deployment.
+
+---
+
+### 🔄 Fuzzed Actions
+
+During invariant testing, the system is subjected to randomized sequences of valid actions, including:
+
+- Deploying new lotteries
+- Buying tickets
+- Finalizing lotteries
+- Fulfilling randomness callbacks
+- Canceling and force-canceling lotteries
+- Claiming refunds
+- Withdrawing USDC and native ETH
+- Sweeping surplus funds
+- Updating deployer configuration
+- Arbitrary time warping
+
+All actions are executed by randomized actors under realistic constraints.
+
+---
+
+### 📈 Coverage & Confidence
+
+- Each invariant is executed across **hundreds of randomized runs**
+- Each run performs **tens of thousands of contract calls**
+- No reverts, discards, or invariant violations were observed in the current configuration
+
+This provides strong evidence that:
+- Accounting remains correct under adversarial sequencing
+- Governance actions cannot break safety guarantees
+- Registry integrity is preserved across the system’s lifetime
+
+> Invariant testing does not prove the absence of all bugs,  
+> but it significantly raises confidence that **entire classes of bugs cannot exist**.
+
+---
+
+### 🧠 Relationship to Other Tests
+
+Invariant tests **complement**, not replace, unit and integration tests:
+
+- Unit tests verify *specific expected behaviors*
+- Invariants verify *global safety properties*
+- Together, they provide defense-in-depth against both logic bugs and emergent behavior
+
 ---
 
 ## 🛠️ Technology & Tooling
