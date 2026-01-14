@@ -15,7 +15,12 @@ contract LotteryRegistry {
 
     event OwnershipTransferred(address indexed oldOwner, address indexed newOwner);
     event RegistrarSet(address indexed registrar, bool authorized);
-    event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
+    event LotteryRegistered(
+        uint256 indexed index,
+        uint256 indexed typeId,
+        address indexed lottery,
+        address creator
+    );
 
     address public owner;
 
@@ -54,7 +59,11 @@ contract LotteryRegistry {
         emit RegistrarSet(registrar, authorized);
     }
 
-    function registerLottery(uint256 typeId, address lottery, address creator) external onlyRegistrar {
+    function registerLottery(
+        uint256 typeId,
+        address lottery,
+        address creator
+    ) external onlyRegistrar {
         if (lottery == address(0) || creator == address(0)) revert ZeroAddress();
         if (typeId == 0) revert InvalidTypeId();
         if (typeIdOf[lottery] != 0) revert AlreadyRegistered();
@@ -67,7 +76,12 @@ contract LotteryRegistry {
 
         lotteriesByType[typeId].push(lottery);
 
-        emit LotteryRegistered(allLotteries.length - 1, typeId, lottery, creator);
+        emit LotteryRegistered(
+            allLotteries.length - 1,
+            typeId,
+            lottery,
+            creator
+        );
     }
 
     function isRegisteredLottery(address lottery) external view returns (bool) {
@@ -82,11 +96,17 @@ contract LotteryRegistry {
         return lotteriesByType[typeId].length;
     }
 
-    function getLotteryByTypeAtIndex(uint256 typeId, uint256 index) external view returns (address) {
+    function getLotteryByTypeAtIndex(
+        uint256 typeId,
+        uint256 index
+    ) external view returns (address) {
         return lotteriesByType[typeId][index];
     }
 
-    function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
+    function getAllLotteries(
+        uint256 start,
+        uint256 limit
+    ) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
         if (start >= n || limit == 0) return new address;
 
@@ -99,7 +119,11 @@ contract LotteryRegistry {
         }
     }
 
-    function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit) external view returns (address[] memory page) {
+    function getLotteriesByType(
+        uint256 typeId,
+        uint256 start,
+        uint256 limit
+    ) external view returns (address[] memory page) {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
         if (start >= n || limit == 0) return new address;
