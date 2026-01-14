@@ -114,7 +114,6 @@ contract LotteryFinalizeResolveTest is BaseTest {
     }
 
     /// @dev After a successful finalize, status becomes Drawing, so a second finalize reverts with LotteryNotOpen
-    ///      (it will never reach RequestPending because the status check happens first in the contract).
     function test_FinalizeRevertsIfCalledAgainWhileDrawing() public {
         vm.startPrank(buyer1);
         usdc.approve(address(lottery), type(uint256).max);
@@ -145,8 +144,6 @@ contract LotteryFinalizeResolveTest is BaseTest {
         lottery.finalize{value: fee}();
 
         uint64 realId = lottery.entropyRequestId();
-
-        // callback with wrong provider should be rejected and state unchanged
         address wrongProvider = address(0xBEEF);
 
         vm.prank(address(entropy));
@@ -197,10 +194,50 @@ contract LotteryFinalizeResolveTest is BaseTest {
         lottery.finalize{value: fee}();
 
         uint64 reqId = lottery.entropyRequestId();
-
-        // total = 5, winningIndex = 4 -> buyer2
         entropy.fulfill(reqId, bytes32(uint256(4)));
 
         assertEq(lottery.winner(), buyer2);
+    }
+
+    // -----------------------------
+    // Finalize when maxTickets reached (before deadline)
+    // -----------------------------
+    function test_FinalizeSucceedsWhenMaxTicketsReached_BeforeDeadline() public {
+        vm.startPrank(creator);
+        usdc.approve(address(deployer), type(uint256).max);
+
+        address lotAddr = deployer.createSingleWinnerLottery(
+            "MaxTicketsLottery",
+            2 * 1e6,   // ticket price
+            100 * 1e6, // winning pot
+            1,         // minTickets
+            5,         // maxTickets
+            30 days,   // duration (not expired)
+            0          // minPurchaseAmount
+        );
+        vm.stopPrank();
+
+        LotterySingleWinner l = LotterySingleWinner(payable(lotAddr));
+
+        vm.startPrank(buyer1);
+        usdc.approve(address(l), type(uint256).max);
+        l.buyTickets(5);
+        vm.stopPrank();
+
+        assertEq(l.getSold(), 5);
+        assertTrue(block.timestamp < l.deadline());
+
+        uint256 fee = entropy.getFee(provider);
+
+        vm.prank(buyer2);
+        l.finalize{value: fee}();
+
+        assertEq(uint256(l.status()), uint256(LotterySingleWinner.Status.Drawing));
+
+        uint64 reqId = l.entropyRequestId();
+        entropy.fulfill(reqId, bytes32(uint256(1)));
+
+        assertEq(uint256(l.status()), uint256(LotterySingleWinner.Status.Completed));
+        assertTrue(l.winner() != address(0));
     }
 }
