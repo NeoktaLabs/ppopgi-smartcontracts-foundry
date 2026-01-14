@@ -8,9 +8,16 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Configure git auth for clones
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -21,6 +28,7 @@ jobs:
         run: |
           forge --version
           cast --version
+          git --version
 
       - name: Install dependencies
         run: |
