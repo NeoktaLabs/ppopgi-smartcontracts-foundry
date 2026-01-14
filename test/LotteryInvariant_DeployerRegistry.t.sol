@@ -14,8 +14,9 @@ import "./mocks/MockEntropy.sol";
 import "./mocks/RevertingReceiver.sol";
 
 /// @notice Separate base class for invariant tests to avoid inheritance diamond.
-/// @dev Define our own `vm` handle explicitly (for older forge-std where `vm` isn't auto-exposed).
-contract InvariantBaseTest is StdInvariant {
+/// @dev Inherit Test to get assert helpers, StdInvariant for invariant tooling.
+///      Define our own `_vm` handle explicitly to be robust across forge-std versions.
+contract InvariantBaseTest is Test, StdInvariant {
     Vm internal constant _vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
     address internal admin;
@@ -78,7 +79,6 @@ contract InvariantBaseTest is StdInvariant {
 }
 
 /// @notice Fuzz action handler that creates lotteries via the deployer and interacts with them.
-/// @dev Uses its own `_vm` handle (do not rely on `vm` being injected by forge-std version).
 contract LotteryInvariantHandler is Test {
     Vm internal constant _vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
