@@ -204,6 +204,7 @@ test/
 ├── LotteryGovernanceSweep.t.sol
 ├── LotteryCreation.t.sol
 ├── LotteryPolish.t.sol
+├── LotteryInvariant_DeployerRegistry.sol
 ├── LotteryAdditionalCoverage.t.sol
 └── mocks/
     ├── MockEntropy.sol
