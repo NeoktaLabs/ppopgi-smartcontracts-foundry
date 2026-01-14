@@ -29,6 +29,10 @@ The test suite validates all core components of the system:
 * ✅ Safe handling of external randomness callbacks
 * ✅ Admin powers cannot steal or misroute user funds
 * ✅ Boundary conditions (deadlines, caps, off-by-one cases)
+* ✅ Winner selection correctness at range boundaries (first ticket, last ticket, and edge cases)
+* ✅ Anti-spam economic constraints enforced at deployment time
+* ✅ Full liability exhaustion after withdrawals (`totalReservedUSDC == 0`)
+* ✅ Safety against randomness callback replay
 
 ---
 
@@ -88,6 +92,7 @@ test/
 ├── LotteryGovernanceSweep.t.sol
 ├── LotteryCreation.t.sol
 ├── LotteryPolish.t.sol
+├── LotteryAdditionalCoverage.t.sol
 └── mocks/
     ├── MockEntropy.sol
     ├── MockUSDC.sol
@@ -190,6 +195,19 @@ test/
     * `totalReservedUSDC` accounting after full withdrawals
     * Registry metadata correctness after creation
 * **Why this matters:** Catches subtle off-by-one and lifecycle bugs.
+
+### `LotteryAdditionalCoverage.t.sol` — Advanced Edge-Case & Accounting Tests
+**Contracts tested:** `LotterySingleWinner`, `SingleWinnerDeployer`, `MockEntropy`
+* **Behavior:**
+    * Winner selection at all critical ticket boundaries:
+        * First ticket
+        * Last ticket
+        * Edges between ticket ranges
+    * Deployment-time rejection of economically unsafe configurations (BatchTooCheap)
+    * End-to-end withdrawals for winner, creator, and protocol
+    * Verification that all liabilities are exhausted (`totalReservedUSDC == 0`)
+    * Protection against randomness callback replay
+* **Why this matters:** These tests cover the most subtle and failure-prone areas of raffle-style contracts: off-by-one errors, accounting drift, misconfigured deployments, and unexpected external callbacks.
 
 ---
 
