@@ -12,14 +12,14 @@ import "./mocks/MockEntropy.sol";
 import "./mocks/RevertingReceiver.sol";
 
 contract BaseTest is Test {
-    // Valid hex-only addresses (20-byte recommended)
-    address internal admin        = address(0x000000000000000000000000000000000000A11C);
-    address internal safeOwner    = address(0x0000000000000000000000000000000000005AFE);
-    address internal creator      = address(0x0000000000000000000000000000000000C0FFEE);
-    address internal buyer1       = address(0x000000000000000000000000000000000000B001);
-    address internal buyer2       = address(0x000000000000000000000000000000000000B002);
-    address internal feeRecipient = address(0x000000000000000000000000000000000000FEE1);
-    address internal provider     = address(0x0000000000000000000000000000000000001234);
+    // Use deterministic Foundry-generated addresses to avoid Solidity 0.8.33 checksum-literal errors
+    address internal admin;
+    address internal safeOwner;
+    address internal creator;
+    address internal buyer1;
+    address internal buyer2;
+    address internal feeRecipient;
+    address internal provider;
 
     LotteryRegistry internal registry;
     SingleWinnerDeployer internal deployer;
@@ -29,6 +29,15 @@ contract BaseTest is Test {
     MockEntropy internal entropy;
 
     function setUp() public virtual {
+        // Deterministic test addresses (no checksum problems)
+        admin        = vm.addr(1);
+        safeOwner    = vm.addr(2);
+        creator      = vm.addr(3);
+        buyer1       = vm.addr(4);
+        buyer2       = vm.addr(5);
+        feeRecipient = vm.addr(6);
+        provider     = vm.addr(7);
+
         vm.startPrank(admin);
 
         usdc = new MockUSDC();
