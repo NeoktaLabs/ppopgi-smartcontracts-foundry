@@ -39,9 +39,9 @@ contract LotteryFinalizeResolveTest is BaseTest {
         uint256 winningPot = lottery.winningPot();
         uint256 ticketRevenue = lottery.ticketRevenue();
 
-        uint256 pct = lottery.protocolFeePercent();
-        uint256 feePot = (winningPot * pct) / 100;
-        uint256 feeRev = (ticketRevenue * pct) / 100;
+        // protocolFeePercent = 10 in BaseTest defaults
+        uint256 feePot = (winningPot * 10) / 100;
+        uint256 feeRev = (ticketRevenue * 10) / 100;
 
         uint256 winnerAmount = winningPot - feePot;
         uint256 creatorNet = ticketRevenue - feeRev;
@@ -114,8 +114,8 @@ contract LotteryFinalizeResolveTest is BaseTest {
         assertEq(buyer2.balance, beforeBal - fee);
     }
 
-    /// @dev After a successful finalize, status becomes Drawing, so a second finalize reverts with LotteryNotOpen
-    ///      (it will never reach RequestPending because the status check happens first in the contract).
+    /// @dev After a successful finalize, status becomes Drawing,
+    ///      so a second finalize reverts with LotteryNotOpen.
     function test_FinalizeRevertsIfCalledAgainWhileDrawing() public {
         vm.startPrank(buyer1);
         usdc.approve(address(lottery), type(uint256).max);
@@ -146,8 +146,6 @@ contract LotteryFinalizeResolveTest is BaseTest {
         lottery.finalize{value: fee}();
 
         uint64 realId = lottery.entropyRequestId();
-
-        // callback with wrong provider should be rejected and state unchanged
         address wrongProvider = address(0xBEEF);
 
         vm.prank(address(entropy));
@@ -198,16 +196,12 @@ contract LotteryFinalizeResolveTest is BaseTest {
         lottery.finalize{value: fee}();
 
         uint64 reqId = lottery.entropyRequestId();
-
-        // total = 5, winningIndex = 4 -> buyer2
         entropy.fulfill(reqId, bytes32(uint256(4)));
 
         assertEq(lottery.winner(), buyer2);
     }
 
     function test_FinalizeSucceedsWhenMaxTicketsReached_BeforeDeadline() public {
-        // Deploy a lottery with a small maxTickets so we can reach it in tests.
-        // Keep other defaults consistent with BaseTest.
         uint64 maxTix = 5;
         uint64 minTix = 1;
 
@@ -216,30 +210,24 @@ contract LotteryFinalizeResolveTest is BaseTest {
             entropy: address(entropy),
             entropyProvider: provider,
             feeRecipient: feeRecipient,
-            protocolFeePercent: protocolFeePercent,
+            protocolFeePercent: protocolFeePercent, // unchanged
             creator: creator,
             name: "MaxTicketsLottery",
-            ticketPrice: 2 * 1e6,     // 2 USDC
-            winningPot: 100 * 1e6,    // 100 USDC
+            ticketPrice: 2 * 1e6,
+            winningPot: 100 * 1e6,
             minTickets: minTix,
             maxTickets: maxTix,
-            durationSeconds: 30 days, // far in the future, so we're NOT relying on deadline
+            durationSeconds: 30 days,
             minPurchaseAmount: 0
         });
 
-        // Fund + confirm + open (mirror how deployer would do it)
         LotterySingleWinner l = new LotterySingleWinner(params);
 
-        vm.startPrank(address(this));
-        // BaseTest should own MockUSDC minting; adjust if your MockUSDC uses a different mint mechanism.
-        // If your BaseTest already prefunds creator, you can instead `prank(creator)` and transferFrom.
+        // fund + open
         usdc.mint(address(this), params.winningPot);
-        usdc.approve(address(l), params.winningPot);
         usdc.transfer(address(l), params.winningPot);
         l.confirmFunding();
-        vm.stopPrank();
 
-        // Buy exactly maxTickets
         vm.startPrank(buyer1);
         usdc.approve(address(l), type(uint256).max);
         l.buyTickets(maxTix);
@@ -250,13 +238,11 @@ contract LotteryFinalizeResolveTest is BaseTest {
 
         uint256 fee = entropy.getFee(provider);
 
-        // Should finalize even though not expired because it's "full"
         vm.prank(buyer2);
         l.finalize{value: fee}();
 
         assertEq(uint256(l.status()), uint256(LotterySingleWinner.Status.Drawing));
 
-        // Resolve to ensure it completes cleanly
         uint64 reqId = l.entropyRequestId();
         entropy.fulfill(reqId, bytes32(uint256(1)));
 
