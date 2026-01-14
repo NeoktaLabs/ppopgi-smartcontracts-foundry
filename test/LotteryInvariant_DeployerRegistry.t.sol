@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+// NOTE: We import Test + StdInvariant but we DO NOT rely on them to provide `vm`.
+// Some forge-std versions don't auto-expose the `vm` instance, so we define it ourselves.
 import "forge-std/Test.sol";
 import "forge-std/StdInvariant.sol";
 
@@ -12,9 +14,21 @@ import "./mocks/MockUSDC.sol";
 import "./mocks/MockEntropy.sol";
 import "./mocks/RevertingReceiver.sol";
 
+/// @dev Minimal Vm interface for cheatcodes (compatible across old forge-std versions).
+interface Vm {
+    function addr(uint256 privateKey) external returns (address);
+    function startPrank(address) external;
+    function stopPrank() external;
+    function deal(address who, uint256 newBalance) external;
+    function warp(uint256 newTimestamp) external;
+}
+
 /// @notice Separate base class for invariant tests to avoid inheritance diamond.
-/// @dev StdInvariant versions differ; importing Test explicitly keeps `vm` available reliably.
+/// @dev Defines `vm` explicitly (older forge-std compatibility).
 contract InvariantBaseTest is StdInvariant {
+    // hevm cheatcode address used by Foundry
+    Vm internal constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
     address internal admin;
     address internal safeOwner;
     address internal creator;
@@ -75,7 +89,10 @@ contract InvariantBaseTest is StdInvariant {
 }
 
 /// @notice Fuzz action handler that creates lotteries via the deployer and interacts with them.
+/// @dev Also defines `vm` explicitly (older forge-std compatibility).
 contract LotteryInvariantHandler is Test {
+    Vm internal constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
     LotteryRegistry public registry;
     SingleWinnerDeployer public deployer;
     MockUSDC public usdc;
@@ -118,6 +135,8 @@ contract LotteryInvariantHandler is Test {
         provider = _provider;
     }
 
+    // -------- view helpers used by invariants --------
+
     function lotsLength() external view returns (uint256) {
         return lots.length;
     }
@@ -125,6 +144,8 @@ contract LotteryInvariantHandler is Test {
     function lotsAt(uint256 i) external view returns (LotterySingleWinner) {
         return lots[i];
     }
+
+    // -------- internal helpers --------
 
     function _hasLots() internal view returns (bool) {
         return lots.length > 0;
@@ -356,7 +377,7 @@ contract LotteryInvariant_DeployerRegistry is InvariantBaseTest {
         for (uint256 i = 0; i < n; i++) {
             LotterySingleWinner lot = handler.lotsAt(i);
 
-            // USDC solvency vs current accounting variable
+            // USDC solvency vs your current accounting variable
             assertGe(usdc.balanceOf(address(lot)), lot.totalReservedUSDC());
 
             // Native solvency
@@ -365,14 +386,12 @@ contract LotteryInvariant_DeployerRegistry is InvariantBaseTest {
             // For a single lottery instance, activeDrawings ∈ {0,1}
             assertLe(lot.activeDrawings(), 1);
 
-            // Drawing sanity
             if (lot.status() == LotterySingleWinner.Status.Drawing) {
                 assertTrue(lot.entropyRequestId() != 0);
                 assertTrue(lot.drawingRequestedAt() != 0);
                 assertTrue(lot.soldAtDrawing() > 0);
             }
 
-            // Open should not have a pending request
             if (lot.status() == LotterySingleWinner.Status.Open) {
                 assertEq(lot.entropyRequestId(), 0);
             }
@@ -384,11 +403,9 @@ contract LotteryInvariant_DeployerRegistry is InvariantBaseTest {
         for (uint256 i = 0; i < n; i++) {
             LotterySingleWinner lot = handler.lotsAt(i);
 
-            // Deployer + ownership expectations
             assertEq(lot.deployer(), address(deployer));
             assertEq(lot.owner(), safeOwner);
 
-            // If registered, registry metadata must match.
             uint256 typeId = registry.typeIdOf(address(lot));
             if (typeId != 0) {
                 assertEq(typeId, deployer.SINGLE_WINNER_TYPE_ID());
