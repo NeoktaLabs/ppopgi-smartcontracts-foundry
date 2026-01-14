@@ -113,7 +113,9 @@ contract LotteryFinalizeResolveTest is BaseTest {
         assertEq(buyer2.balance, beforeBal - fee);
     }
 
-    function test_FinalizeRevertsIfRequestPending() public {
+    /// @dev After a successful finalize, status becomes Drawing, so a second finalize reverts with LotteryNotOpen
+    ///      (it will never reach RequestPending because the status check happens first in the contract).
+    function test_FinalizeRevertsIfCalledAgainWhileDrawing() public {
         vm.startPrank(buyer1);
         usdc.approve(address(lottery), type(uint256).max);
         lottery.buyTickets(3);
@@ -125,7 +127,7 @@ contract LotteryFinalizeResolveTest is BaseTest {
         vm.prank(buyer2);
         lottery.finalize{value: fee}();
 
-        vm.expectRevert(LotterySingleWinner.RequestPending.selector);
+        vm.expectRevert(LotterySingleWinner.LotteryNotOpen.selector);
         vm.prank(buyer2);
         lottery.finalize{value: fee}();
     }
