@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@pythnetwork/entropy-sdk-solidity/IEntropy.sol";
+import "../../src/vendor/pyth/IEntropy.sol";
 
 interface IEntropyConsumer {
     function entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external;
