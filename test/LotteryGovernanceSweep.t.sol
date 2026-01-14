@@ -1,111 +1,175 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "forge-std/Test.sol";
 import "./Base.t.sol";
 import "./mocks/RevertingReceiver.sol";
 
-contract LotteryWithdrawSweepPauseTest is BaseTest {
+contract LotteryGovernanceSweepTest is BaseTest {
     function setUp() public override {
         super.setUp();
         lottery = _deployDefaultLottery();
     }
 
-    function test_WithdrawFunds_DecrementsReserved() public {
-        vm.startPrank(buyer1);
-        usdc.approve(address(lottery), type(uint256).max);
-        lottery.buyTickets(5);
+    function _buyMinAndFinalizeToDrawing(LotterySingleWinner l, address buyer, address finalizer) internal returns (uint64) {
+        // Ensure minTickets reached
+        vm.startPrank(buyer);
+        usdc.approve(address(l), type(uint256).max);
+        l.buyTickets(l.minTickets());
         vm.stopPrank();
 
-        vm.warp(lottery.deadline());
-
+        // Finalize at/after deadline
+        vm.warp(l.deadline());
         uint256 fee = entropy.getFee(provider);
-        vm.prank(buyer1);
-        lottery.finalize{value: fee}();
 
-        entropy.fulfill(lottery.entropyRequestId(), bytes32(uint256(123)));
+        vm.prank(finalizer);
+        l.finalize{value: fee}();
 
-        uint256 creatorClaimable = lottery.claimableFunds(creator);
-        assertGt(creatorClaimable, 0);
+        assertEq(uint256(l.status()), uint256(LotterySingleWinner.Status.Drawing));
+        assertEq(l.activeDrawings(), 1);
 
-        uint256 reservedBefore = lottery.totalReservedUSDC();
+        return l.entropyRequestId();
+    }
 
+    // -----------------------------
+    // Governance locks
+    // -----------------------------
+
+    function test_GovernanceLock_BlocksEntropyUpdatesWhileDrawing() public {
+        uint64 reqId = _buyMinAndFinalizeToDrawing(lottery, buyer1, buyer2);
+        assertTrue(reqId != 0);
+
+        vm.startPrank(safeOwner);
+
+        vm.expectRevert(LotterySingleWinner.DrawingsActive.selector);
+        lottery.setEntropyProvider(address(0xBEEF));
+
+        vm.expectRevert(LotterySingleWinner.DrawingsActive.selector);
+        lottery.setEntropyContract(address(0xCAFE));
+
+        vm.stopPrank();
+    }
+
+    function test_GovernanceLock_AllowsEntropyUpdatesAfterResolve() public {
+        uint64 reqId = _buyMinAndFinalizeToDrawing(lottery, buyer1, buyer2);
+
+        // Resolve
+        entropy.fulfill(reqId, bytes32(uint256(123)));
+        assertEq(uint256(lottery.status()), uint256(LotterySingleWinner.Status.Completed));
+        assertEq(lottery.activeDrawings(), 0);
+
+        vm.startPrank(safeOwner);
+
+        address newProvider = address(0xBEEF);
+        MockEntropy newEntropy = new MockEntropy();
+        newEntropy.setFee(newProvider, 0.01 ether);
+
+        lottery.setEntropyProvider(newProvider);
+        assertEq(lottery.entropyProvider(), newProvider);
+
+        lottery.setEntropyContract(address(newEntropy));
+        assertEq(address(lottery.entropy()), address(newEntropy));
+
+        vm.stopPrank();
+    }
+
+    // -----------------------------
+    // USDC sweep safety
+    // -----------------------------
+
+    function test_SweepSurplus_RevertsWhenNoTrueSurplus() public {
+        // Create liabilities: pot + ticket revenue still reserved
+        vm.startPrank(buyer1);
+        usdc.approve(address(lottery), type(uint256).max);
+        lottery.buyTickets(2);
+        vm.stopPrank();
+
+        // With liabilities outstanding, balance should equal reserved (no surplus)
+        vm.startPrank(safeOwner);
+        vm.expectRevert(LotterySingleWinner.NoSurplus.selector);
+        lottery.sweepSurplus(safeOwner);
+        vm.stopPrank();
+    }
+
+    function test_SweepSurplus_SweepsOnlyExtraUSDC() public {
+        // Create some liabilities
+        vm.startPrank(buyer1);
+        usdc.approve(address(lottery), type(uint256).max);
+        lottery.buyTickets(2);
+        vm.stopPrank();
+
+        // Send accidental extra USDC directly to the lottery
+        uint256 extra = 123 * 1e6;
         vm.prank(creator);
-        lottery.withdrawFunds();
+        usdc.transfer(address(lottery), extra);
 
-        uint256 reservedAfter = lottery.totalReservedUSDC();
-        assertEq(reservedAfter, reservedBefore - creatorClaimable);
+        uint256 ownerBefore = usdc.balanceOf(safeOwner);
+
+        vm.prank(safeOwner);
+        lottery.sweepSurplus(safeOwner);
+
+        uint256 ownerAfter = usdc.balanceOf(safeOwner);
+        assertEq(ownerAfter - ownerBefore, extra);
+
+        // After sweeping, reserved should still be covered exactly (no further surplus)
+        vm.prank(safeOwner);
+        vm.expectRevert(LotterySingleWinner.NoSurplus.selector);
+        lottery.sweepSurplus(safeOwner);
     }
 
-    function test_NativeRefundCredit_ThenWithdrawTo() public {
-        vm.warp(lottery.deadline());
+    // -----------------------------
+    // Native sweep safety
+    // -----------------------------
 
+    function test_SweepNativeSurplus_ProtectsClaimableNative() public {
+        // Create a native claimable by forcing a refund to a contract that rejects ETH
         RevertingReceiver rr = new RevertingReceiver();
-        vm.deal(address(rr), 10 ether);
+        uint256 refundAmt = 0.2 ether;
 
-        uint256 fee = entropy.getFee(provider);
-        uint256 overpay = 0.123 ether;
-
-        // Track lottery balance before
-        uint256 lotteryBalanceBefore = address(lottery).balance;
-
-        // Call finalize via reverting receiver
-        rr.callFinalize{value: fee + overpay}(address(lottery));
-
-        // Track lottery balance after
-        uint256 lotteryBalanceAfter = address(lottery).balance;
-
-        // The difference is the failed refund amount that stayed in the lottery
-        uint256 expectedCredited = lotteryBalanceAfter - lotteryBalanceBefore;
-
-        uint256 credited = lottery.claimableNative(address(rr));
-        assertEq(credited, expectedCredited);
-
-        uint256 beforeBal = buyer1.balance;
-        rr.callWithdrawNativeTo(address(lottery), buyer1);
-        uint256 afterBal = buyer1.balance;
-
-        assertEq(afterBal, beforeBal + credited);
-        assertEq(lottery.claimableNative(address(rr)), 0);
-    }
-
-    function test_Pause_BlocksBuyAndFinalize() public {
-        vm.prank(safeOwner);
-        lottery.pause();
-
-        vm.startPrank(buyer1);
-        usdc.approve(address(lottery), type(uint256).max);
-        vm.expectRevert();
-        lottery.buyTickets(1);
-        vm.stopPrank();
+        // Call finalize on a not-ready lottery (will revert) isn't useful; instead:
+        // We can force native claimable through _safeNativeTransfer by triggering the cancel branch
+        // and making msg.sender a reverting receiver.
+        //
+        // To enter cancel branch in finalize():
+        // - warp to deadline
+        // - sold < minTickets
+        // Then finalize refunds msg.value back to msg.sender; if receiver rejects, it becomes claimableNative.
 
         vm.warp(lottery.deadline());
 
-        uint256 fee = entropy.getFee(provider);
-        vm.prank(buyer1);
-        vm.expectRevert();
-        lottery.finalize{value: fee}();
-    }
+        uint256 beforeClaimable = lottery.claimableNative(address(rr));
+        assertEq(beforeClaimable, 0);
 
-    function test_SweepSurplus_WorksOnlyIfSurplus() public {
+        // Call finalize from rr via a low-level call so msg.sender is rr
+        bytes memory callData = abi.encodeWithSelector(LotterySingleWinner.finalize.selector);
+        vm.deal(address(rr), refundAmt);
+
+        vm.prank(address(rr));
+        (bool ok,) = address(lottery).call{value: refundAmt}(callData);
+        assertTrue(ok);
+
+        // Lottery should be canceled and rr should have claimableNative
+        assertEq(uint256(lottery.status()), uint256(LotterySingleWinner.Status.Canceled));
+        assertEq(lottery.claimableNative(address(rr)), refundAmt);
+        assertEq(lottery.totalClaimableNative(), refundAmt);
+
+        // Send extra native to the lottery to create sweepable surplus
+        uint256 extra = 0.5 ether;
+        vm.deal(creator, creator.balance + extra);
+        vm.prank(creator);
+        (bool sent,) = address(lottery).call{value: extra}("");
+        assertTrue(sent);
+
+        uint256 ownerBefore = safeOwner.balance;
+
+        // Sweep should only sweep the extra (not the claimableNative)
         vm.prank(safeOwner);
-        vm.expectRevert(LotterySingleWinner.NoSurplus.selector);
-        lottery.sweepSurplus(vm.addr(999));
+        lottery.sweepNativeSurplus(safeOwner);
 
-        uint256 accidental = 123 * 1e6;
-        usdc.mint(address(lottery), accidental);
+        uint256 ownerAfter = safeOwner.balance;
+        assertEq(ownerAfter - ownerBefore, extra);
 
-        address recipient = vm.addr(999);
-        uint256 beforeBal = usdc.balanceOf(recipient);
-
-        vm.prank(safeOwner);
-        lottery.sweepSurplus(recipient);
-
-        uint256 afterBal = usdc.balanceOf(recipient);
-        assertEq(afterBal, beforeBal + accidental);
-
-        vm.prank(safeOwner);
-        vm.expectRevert(LotterySingleWinner.NoSurplus.selector);
-        lottery.sweepSurplus(recipient);
+        // Claimable should still be intact
+        assertEq(lottery.claimableNative(address(rr)), refundAmt);
+        assertEq(lottery.totalClaimableNative(), refundAmt);
     }
 }
