@@ -317,6 +317,10 @@ contract LotteryInvariant_DeployerRegistry is InvariantBase {
 
     LotteryInvariantHandler internal handler;
 
+    /// @dev Known actors whose claimables we can sum deterministically in invariants.
+    ///      Winner is added dynamically per lottery (if not already in this list).
+    address[] internal actors;
+
     function setUp() public {
         admin        = _vm.addr(1);
         safeOwner    = _vm.addr(2);
@@ -359,6 +363,14 @@ contract LotteryInvariant_DeployerRegistry is InvariantBase {
         _vm.deal(admin, 100 ether);
         _vm.deal(safeOwner, 100 ether);
         _vm.deal(feeRecipient, 100 ether);
+
+        // ---- actors list for deterministic claimable sums ----
+        actors.push(admin);
+        actors.push(safeOwner);
+        actors.push(creator);
+        actors.push(buyer1);
+        actors.push(buyer2);
+        actors.push(feeRecipient);
 
         handler = new LotteryInvariantHandler(
             registry,
@@ -411,6 +423,66 @@ contract LotteryInvariant_DeployerRegistry is InvariantBase {
                 _assertEq(typeId, deployer.SINGLE_WINNER_TYPE_ID(), "registry typeId mismatch");
                 _assertEqAddr(registry.creatorOf(address(lot)), lot.creator(), "registry creator mismatch");
                 _assertTrue(registry.isRegisteredLottery(address(lot)), "registry says not registered");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // New invariants (added)
+    // ------------------------------------------------------------------------
+
+    /// @notice Claimable USDC for known actors (and the current winner) must never exceed
+    ///         the contract's reserved liabilities; reserved liabilities must remain solvent.
+    /// @dev We can't iterate all possible addresses in fuzzing, but summing protocol roles +
+    ///      buyers + winner catches the common accounting failure modes.
+    function invariant_claimablesBoundedByReserved() public view {
+        uint256 n = handler.lotsLength();
+        for (uint256 i = 0; i < n; i++) {
+            LotterySingleWinner lot = handler.lotsAt(i);
+
+            uint256 sum;
+            for (uint256 j = 0; j < actors.length; j++) {
+                sum += lot.claimableFunds(actors[j]);
+            }
+
+            // Include winner (may not be in actors list).
+            address w = lot.winner();
+            if (w != address(0)) {
+                bool winnerAlreadyCounted;
+                for (uint256 j = 0; j < actors.length; j++) {
+                    if (actors[j] == w) {
+                        winnerAlreadyCounted = true;
+                        break;
+                    }
+                }
+                if (!winnerAlreadyCounted) {
+                    sum += lot.claimableFunds(w);
+                }
+            }
+
+            _assertLe(sum, lot.totalReservedUSDC(), "claimables sum > totalReservedUSDC");
+            _assertGe(usdc.balanceOf(address(lot)), lot.totalReservedUSDC(), "USDC insolvent vs reserved (claimables)");
+        }
+    }
+
+    /// @notice Entropy request bookkeeping must match the state machine:
+    ///         - requestId != 0  => status == Drawing and requestedAt != 0
+    ///         - status == Drawing => requestId != 0
+    function invariant_entropyRequestMatchesStatus() public view {
+        uint256 n = handler.lotsLength();
+        for (uint256 i = 0; i < n; i++) {
+            LotterySingleWinner lot = handler.lotsAt(i);
+
+            uint64 req = lot.entropyRequestId();
+            LotterySingleWinner.Status st = lot.status();
+
+            if (req != 0) {
+                _assertEq(uint256(st), uint256(LotterySingleWinner.Status.Drawing), "reqId set while not Drawing");
+                _assertTrue(lot.drawingRequestedAt() != 0, "reqId set but requestedAt=0");
+            }
+
+            if (st == LotterySingleWinner.Status.Drawing) {
+                _assertTrue(req != 0, "Drawing but reqId=0");
             }
         }
     }
