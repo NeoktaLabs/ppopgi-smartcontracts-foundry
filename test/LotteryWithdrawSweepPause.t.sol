@@ -1,113 +1,100 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/**
- * @title LotteryRegistry
- * @notice A minimal, “forever” on-chain registry for lottery instances.
- */
-contract LotteryRegistry {
-    error NotOwner();
-    error ZeroAddress();
-    error NotRegistrar();
-    error AlreadyRegistered();
-    error InvalidTypeId();
-    error NotContract();
+import "./Base.t.sol";
 
-    event OwnershipTransferred(address indexed oldOwner, address indexed newOwner);
-    event RegistrarSet(address indexed registrar, bool authorized);
-    event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
-
-    address public owner;
-
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
-        _;
+contract LotteryWithdrawSweepPauseTest is BaseTest {
+    function setUp() public override {
+        super.setUp();
+        lottery = _deployDefaultLottery();
     }
 
-    constructor(address _owner) {
-        if (_owner == address(0)) revert ZeroAddress();
-        owner = _owner;
-        emit OwnershipTransferred(address(0), _owner);
+    function test_WithdrawFunds_DecrementsReserved() public {
+        vm.startPrank(buyer1);
+        usdc.approve(address(lottery), type(uint256).max);
+        lottery.buyTickets(3);
+        vm.stopPrank();
+
+        vm.warp(lottery.deadline());
+        uint256 fee = entropy.getFee(provider);
+
+        vm.prank(buyer2);
+        lottery.finalize{value: fee}();
+        entropy.fulfill(lottery.entropyRequestId(), bytes32(uint256(123)));
+
+        uint256 claim = lottery.claimableFunds(buyer1);
+        uint256 reservedBefore = lottery.totalReservedUSDC();
+
+        uint256 balBefore = usdc.balanceOf(buyer1);
+        vm.prank(buyer1);
+        lottery.withdrawFunds();
+        uint256 balAfter = usdc.balanceOf(buyer1);
+
+        assertEq(balAfter - balBefore, claim);
+        assertEq(lottery.claimableFunds(buyer1), 0);
+        assertEq(lottery.totalReservedUSDC(), reservedBefore - claim);
     }
 
-    function transferOwnership(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert ZeroAddress();
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
+    function test_NativeRefundCredit_ThenWithdrawTo() public {
+        RevertingReceiver rr = new RevertingReceiver();
+
+        vm.startPrank(buyer1);
+        usdc.approve(address(lottery), type(uint256).max);
+        lottery.buyTickets(3);
+        vm.stopPrank();
+
+        vm.warp(lottery.deadline());
+        uint256 fee = entropy.getFee(provider);
+
+        vm.prank(address(rr));
+        lottery.finalize{value: fee + 1 ether}();
+
+        assertTrue(lottery.claimableNative(address(rr)) > 0);
+
+        vm.prank(address(rr));
+        lottery.withdrawNativeTo(buyer2);
+
+        assertEq(lottery.claimableNative(address(rr)), 0);
     }
 
-    address[] public allLotteries;
-    mapping(address => uint256) public typeIdOf;
-    mapping(address => address) public creatorOf;
-    mapping(address => uint64) public registeredAt;
-    mapping(uint256 => address[]) internal lotteriesByType;
-    mapping(address => bool) public isRegistrar;
+    function test_SweepSurplus_WorksOnlyIfSurplus() public {
+        vm.startPrank(buyer1);
+        usdc.approve(address(lottery), type(uint256).max);
+        lottery.buyTickets(3);
+        vm.stopPrank();
 
-    modifier onlyRegistrar() {
-        if (!isRegistrar[msg.sender]) revert NotRegistrar();
-        _;
+        vm.warp(lottery.deadline());
+        uint256 fee = entropy.getFee(provider);
+        vm.prank(buyer2);
+        lottery.finalize{value: fee}();
+        entropy.fulfill(lottery.entropyRequestId(), bytes32(uint256(1)));
+
+        vm.prank(safeOwner);
+        vm.expectRevert(LotterySingleWinner.NoSurplus.selector);
+        lottery.sweepSurplus(buyer2);
+
+        usdc.mint(address(lottery), 123 * 1e6);
+
+        vm.prank(safeOwner);
+        lottery.sweepSurplus(buyer2);
+
+        assertEq(usdc.balanceOf(buyer2), 123 * 1e6);
     }
 
-    function setRegistrar(address registrar, bool authorized) external onlyOwner {
-        if (registrar == address(0)) revert ZeroAddress();
-        isRegistrar[registrar] = authorized;
-        emit RegistrarSet(registrar, authorized);
-    }
+    function test_Pause_BlocksBuyAndFinalize() public {
+        vm.prank(safeOwner);
+        lottery.pause();
 
-    function registerLottery(uint256 typeId, address lottery, address creator) external onlyRegistrar {
-        if (lottery == address(0) || creator == address(0)) revert ZeroAddress();
-        if (typeId == 0) revert InvalidTypeId();
-        if (typeIdOf[lottery] != 0) revert AlreadyRegistered();
-        if (lottery.code.length == 0) revert NotContract();
+        vm.startPrank(buyer1);
+        usdc.approve(address(lottery), type(uint256).max);
+        vm.expectRevert(); // Pausable revert
+        lottery.buyTickets(1);
+        vm.stopPrank();
 
-        allLotteries.push(lottery);
-        typeIdOf[lottery] = typeId;
-        creatorOf[lottery] = creator;
-        registeredAt[lottery] = uint64(block.timestamp);
+        vm.warp(lottery.deadline());
 
-        lotteriesByType[typeId].push(lottery);
-
-        emit LotteryRegistered(allLotteries.length - 1, typeId, lottery, creator);
-    }
-
-    function isRegisteredLottery(address lottery) external view returns (bool) {
-        return typeIdOf[lottery] != 0;
-    }
-
-    function getAllLotteriesCount() external view returns (uint256) {
-        return allLotteries.length;
-    }
-
-    function getLotteriesByTypeCount(uint256 typeId) external view returns (uint256) {
-        return lotteriesByType[typeId].length;
-    }
-
-    function getLotteryByTypeAtIndex(uint256 typeId, uint256 index) external view returns (address) {
-        return lotteriesByType[typeId][index];
-    }
-
-    function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
-        uint256 n = allLotteries.length;
-        if (start >= n || limit == 0) return new address;
-        uint256 end = start + limit;
-        if (end > n) end = n;
-
-        page = new address[](end - start);
-        for (uint256 i = start; i < end; i++) {
-            page[i - start] = allLotteries[i];
-        }
-    }
-
-    function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit) external view returns (address[] memory page) {
-        address[] storage arr = lotteriesByType[typeId];
-        uint256 n = arr.length;
-        if (start >= n || limit == 0) return new address;
-        uint256 end = start + limit;
-        if (end > n) end = n;
-
-        page = new address[](end - start);
-        for (uint256 i = start; i < end; i++) {
-            page[i - start] = arr[i];
-        }
+        vm.prank(buyer2);
+        vm.expectRevert(); // Pausable revert
+        lottery.finalize{value: entropy.getFee(provider)}();
     }
 }
