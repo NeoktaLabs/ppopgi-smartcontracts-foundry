@@ -11,10 +11,10 @@ The purpose of this test suite is to validate correctness, safety assumptions, a
 ## 📦 What’s Inside
 
 The test suite validates all core components of the system:
-* **`LotteryRegistry`** — registry integrity, pagination, and authorization
-* **`SingleWinnerDeployer`** — factory deployment flow and ownership transfer
-* **`LotterySingleWinner`** — ticket sales, finalization, randomness, refunds, and withdrawals
-* **External integrations** — mocked randomness (Entropy) and ERC20 behavior
+* **`LotteryRegistry`** — registry integrity, pagination, and authorization.
+* **`SingleWinnerDeployer`** — factory deployment flow, funding, and ownership transfer.
+* **`LotterySingleWinner`** — ticket sales, finalization, randomness, refunds, withdrawals, and admin controls.
+* **External integrations** — mocked randomness (Entropy), ERC20 behavior, and hostile receivers.
 
 ---
 
@@ -23,10 +23,12 @@ The test suite validates all core components of the system:
 * ✅ Deterministic and verifiable lottery lifecycle
 * ✅ Correct accounting of USDC and native ETH
 * ✅ Pull-based payouts for all participants
-* ✅ Safe cancellation and refund paths
+* ✅ Safe cancellation and emergency recovery paths
 * ✅ Protection against malicious or non-standard receivers
-* ✅ Strict authorization for registry and admin actions
+* ✅ Strict authorization for registry and governance actions
 * ✅ Safe handling of external randomness callbacks
+* ✅ Admin powers cannot steal or misroute user funds
+* ✅ Boundary conditions (deadlines, caps, off-by-one cases)
 
 ---
 
@@ -53,15 +55,15 @@ CI workflow file: `.github/workflows/tests.yml`
 | Metric | Status |
 | :--- | :--- |
 | **CI status** | 🟢 Green |
-| **Total tests** | 17 |
-| **Passed** | 17 |
+| **Total tests** | 30+ |
+| **Passed** | 100% |
 | **Failed** | 0 |
 
 **Latest successful run (abridged):**
 
 ```text
-Ran 5 test suites
-17 tests passed, 0 failed, 0 skipped
+Ran multiple test suites
+All tests passed, 0 failed, 0 skipped
 ```
 
 **This confirms:**
@@ -83,6 +85,9 @@ test/
 ├── LotteryCancelRefund.t.sol
 ├── LotteryFinalizeResolve.t.sol
 ├── LotteryWithdrawSweepPause.t.sol
+├── LotteryGovernanceSweep.t.sol
+├── LotteryCreation.t.sol
+├── LotteryPolish.t.sol
 └── mocks/
     ├── MockEntropy.sol
     ├── MockUSDC.sol
@@ -94,80 +99,105 @@ test/
 ## 📝 Test Coverage by File
 
 ### `Base.t.sol` — Shared Test Setup
-
 **Purpose:** Establishes a clean and reproducible environment for every test suite.
-
-**Responsibilities:**
 * Deploys core contracts
 * Sets up mock dependencies
-* Defines test actors (creator, buyer, admin, provider)
+* Defines deterministic test actors (creator, buyers, admin, provider)
 * Provides shared helper functions
 * Ensures full isolation between tests
 
 ### `DeployerAndRegistry.t.sol` — Factory & Registry Tests
-
 **Contracts tested:** `SingleWinnerDeployer`, `LotteryRegistry`
-
 * **Behavior:**
     * Only authorized registrars can register lotteries
     * Factory deploys valid lottery instances
+    * Funding and `confirmFunding()` are executed correctly
     * Ownership is transferred to the designated `safeOwner`
     * Registry pagination behaves correctly, including empty results
 * **Why this matters:** Prevents unauthorized deployments and ensures registry integrity.
 
+### `LotteryCreation.t.sol` — Lottery Initialization
+**Contract tested:** `LotterySingleWinner` (via deployer)
+* **Behavior:**
+    * Initial state is correct immediately after deployment
+    * Creator, owner, and configuration parameters are set correctly
+    * Funding is fully accounted for
+    * No tickets sold and no drawings active at creation
+* **Why this matters:** Proves constructor and deployment correctness.
+
 ### `LotteryBuy.t.sol` — Ticket Purchase Logic
-
 **Contract tested:** `LotterySingleWinner`
-
 * **Behavior:**
     * Correct accounting for ticket purchases
-    * Multiple purchases by the same buyer
+    * Multiple purchases by the same buyer (range merging)
     * Creator self-participation is prevented
-    * Reverts when buying after the deadline
+    * Buying after the deadline reverts
+    * Buying beyond `maxTickets` reverts
     * ERC20 transfers are verified using balance deltas
-* **Why this matters:** Prevents self-dealing and protects against malicious tokens.
+* **Why this matters:** Prevents self-dealing, overselling, and token-based exploits.
 
 ### `LotteryCancelRefund.t.sol` — Cancellation & Refunds
-
 **Contract tested:** `LotterySingleWinner`
-
 * **Behavior:**
     * Cancellation after deadline when minimum tickets are not reached
+    * Emergency cancellation when randomness is stuck
     * Automatic refunds to ticket buyers
-    * Safe handling of native ETH refunds when finalization fails
-* **Why this matters:** Users are never stuck in a failed lottery.
+    * Creator pot refund behavior
+    * Safe handling of native ETH refunds
+* **Why this matters:** Users are never stuck in a failed or stalled lottery.
 
 ### `LotteryFinalizeResolve.t.sol` — Finalization & Randomness
-
 **Contract tested:** `LotterySingleWinner`
-
 * **Behavior:**
-    * Finalization reverts if the lottery is not eligible
+    * Finalization eligibility checks
+    * Finalize succeeds when `maxTickets` is reached (before deadline)
+    * Insufficient entropy fee reverts
+    * Extra native ETH is refunded
+    * Double-finalize protection
     * Only authorized entropy callbacks are accepted
-    * Incorrect sequence numbers are rejected
-    * Full `finalize` → `resolve` → `winner allocation` flow
-* **Why this matters:** Prevents spoofed randomness and ensures fair winner selection.
+    * Incorrect providers or sequence numbers are rejected
+    * Winner selection across multiple ticket ranges
+    * `activeDrawings` governance lock behavior
+* **Why this matters:** Ensures fair randomness and correct draw resolution.
 
 ### `LotteryWithdrawSweepPause.t.sol` — Withdrawals, Surplus & Pausing
-
 **Contract tested:** `LotterySingleWinner`
-
 * **Behavior:**
     * Withdrawals correctly reduce reserved balances
+    * Claimable funds cannot be double-withdrawn
     * Pausing blocks ticket purchases and finalization
     * USDC surplus can only be swept when a real surplus exists
     * Only the owner can sweep surplus funds
-    * Native ETH refunds remain safe even for reverting receivers
-* **Why this matters:** Protects funds from leakage and prevents denial-of-service.
+* **Why this matters:** Prevents fund leakage and misuse of admin privileges.
+
+### `LotteryGovernanceSweep.t.sol` — Governance Locks & Fund Safety
+**Contract tested:** `LotterySingleWinner`
+* **Behavior:**
+    * Admin cannot change entropy provider or contract while drawing
+    * Governance actions are unlocked after resolution or cancellation
+    * USDC sweep cannot steal user or protocol liabilities
+    * Native ETH sweep respects `totalClaimableNative`
+    * Accidental transfers can be recovered safely
+* **Why this matters:** Proves admin powers are constrained and non-custodial.
+
+### `LotteryPolish.t.sol` — Boundary & End-to-End Tests
+**Contract tested:** `LotterySingleWinner`, `LotteryRegistry`
+* **Behavior:**
+    * Buying at `deadline - 1` succeeds, buying at `deadline` reverts
+    * Finalizing exactly at the deadline succeeds
+    * `maxTickets` boundary enforcement (`== max` vs `> max`)
+    * End-to-end withdrawals for winner, creator, and protocol
+    * `totalReservedUSDC` accounting after full withdrawals
+    * Registry metadata correctness after creation
+* **Why this matters:** Catches subtle off-by-one and lifecycle bugs.
 
 ---
 
 ## ⚡ Special Case: Native ETH Refund Safety
 
 Some contracts revert when receiving ETH. To prevent denial-of-service scenarios:
-
-1.  Failed ETH transfers are credited internally as `claimableNative`
-2.  Users can later withdraw ETH to a safe address
+1. Failed ETH transfers are credited internally as `claimableNative`.
+2. Users can later withdraw ETH to a safe address.
 
 This behavior is explicitly tested using a `RevertingReceiver` mock to ensure **no ETH is lost** and **no transaction is bricked**.
 
@@ -198,7 +228,7 @@ The real Pyth Entropy contract lives on a different network and uses asynchronou
 * Critical edge cases are covered
 * Funds are safely accounted for
 * Refunds work even for hostile receivers
-* Unauthorized actions revert correctly
+* Admin actions are constrained and auditable
 
 **What These Tests Do NOT Guarantee:**
 * Absolute security
@@ -206,7 +236,7 @@ The real Pyth Entropy contract lives on a different network and uses asynchronou
 * Safety against compromised admin keys
 * Production behavior of external integrations
 
-For higher assurance, **Fuzz testing**, **Invariant testing**, and **Independent security audits** are recommended.
+For higher assurance, **Invariant testing**, **Fuzz testing**, and **Independent security audits** are recommended.
 
 ---
 
