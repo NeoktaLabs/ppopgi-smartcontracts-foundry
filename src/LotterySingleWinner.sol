@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
-import "./vendor/pyth/IEntropyV2.sol";
+import "./vendor/pyth/IEntropy.sol";
 
 interface IEntropyConsumer {
     function entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external;
@@ -120,7 +120,7 @@ contract LotterySingleWinner is Ownable, IEntropyConsumer, ReentrancyGuard, Paus
     uint256 public immutable protocolFeePercent;
     address public immutable deployer;
 
-    IEntropyV2 public entropy;           // v2
+    IEntropy public entropy;           // v2
     address public entropyProvider;
     uint32 public callbackGasLimit;
 
@@ -201,7 +201,7 @@ contract LotterySingleWinner is Ownable, IEntropyConsumer, ReentrancyGuard, Paus
         if (params.ticketPrice < requiredMinPrice) revert BatchTooCheap();
 
         usdcToken = IERC20(params.usdcToken);
-        entropy = IEntropyV2(params.entropy);
+        entropy = IEntropy(params.entropy);
         entropyProvider = params.entropyProvider;
         callbackGasLimit = params.callbackGasLimit;
 
@@ -517,7 +517,7 @@ contract LotterySingleWinner is Ownable, IEntropyConsumer, ReentrancyGuard, Paus
     function setEntropyContract(address e) external onlyOwner {
         if (e == address(0)) revert InvalidEntropy();
         if (activeDrawings != 0) revert DrawingsActive();
-        entropy = IEntropyV2(e);
+        entropy = IEntropy(e);
         emit EntropyContractUpdated(e);
     }
 
