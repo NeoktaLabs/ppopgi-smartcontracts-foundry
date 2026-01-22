@@ -307,12 +307,12 @@ contract LotterySingleWinner is Ownable, IEntropyConsumer, ReentrancyGuard, Paus
         activeDrawings += 1;
         emit GovernanceLockUpdated(activeDrawings);
 
-        uint256 fee = entropy.getFeeV2(callbackGasLimit);
+        uint256 fee = entropy.getFee(callbackGasLimit);
         if (msg.value < fee) revert InsufficientFee();
 
         bytes32 userRand = keccak256(abi.encodePacked(address(this), block.prevrandao, block.timestamp));
 
-        uint64 requestId = entropy.requestV2{value: fee}(entropyProvider, userRand, callbackGasLimit);
+        uint64 requestId = entropy.request{value: fee}(entropyProvider, userRand, callbackGasLimit);
         if (requestId == 0) revert InvalidRequest();
 
         entropyRequestId = requestId;
